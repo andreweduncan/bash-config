@@ -5,7 +5,7 @@
 
 set -e
 
-BASH_CONFIG_DIR="${HOME}/git/bash-config"
+BASH_CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASHRC_SOURCE_LINE="[ -f \"${BASH_CONFIG_DIR}/.bashrc\" ] && source \"${BASH_CONFIG_DIR}/.bashrc\""
 BASH_PROFILE_SOURCE_LINE="[ -f \"${BASH_CONFIG_DIR}/.bash_profile\" ] && source \"${BASH_CONFIG_DIR}/.bash_profile\""
 

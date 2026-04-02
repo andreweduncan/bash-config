@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BASH_CONFIG_DIR="${HOME}/git/bash-config"
+BASH_CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Homebrew Python first for unversioned python/pip symlinks, then Homebrew, then system paths
 export PATH=\
