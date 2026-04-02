@@ -33,25 +33,27 @@ bash-config/
 │   └── wordlists/
 │       └── wordlist.txt  # Word list for random sandbox names
 └── templates/
-    ├── .cursorrules       # Default Cursor rules copied into new sandboxes
-    └── .cursorignore      # Default Cursor ignore copied into new sandboxes
+    ├── .cursorrules       # Default VS Code/editor rules copied into new sandboxes
+    └── .cursorignore      # Default editor ignore rules copied into new sandboxes
 ```
 
 ## Commands
 
 ### `sb` — Sandbox
 
-Creates a temporary scratch directory, opens it in Cursor, and `cd`s into it. Uses a random two-word name by default.
+Instantly spins up a temporary scratch directory for low-friction prototyping. Sandboxes live in `$TMPDIR/sandbox/`, which macOS clears on restart — so you get a clean workspace with zero manual cleanup. If something turns out to be worth keeping, use `harden` to permanently move it to `~/projects/`.
+
+Opens the new directory in VS Code and `cd`s into it. Uses a random two-word name by default.
 
 ```bash
 sb                        # Create sandbox with random name
-sb -n my-experiment       # Create sandbox with specific name
+sb -n my-experiment       # Create sandbox with a specific name
 sb -f notes.md            # Create sandbox and open a specific file
 sb -d                     # Navigate to the sandbox parent directory
 sb -c                     # Interactive cleanup of unused sandboxes
 ```
 
-Sandboxes live in `$TMPDIR/sandbox/`. Each one gets a `.sbconfig` metadata file, `.cursorrules`, `.cursorignore`, and a `scratchpad.txt`.
+Each sandbox gets a `.sbconfig` metadata file and a `scratchpad.txt` to start from.
 
 ### `harden` — Promote sandbox to project
 
@@ -60,7 +62,7 @@ Moves a sandbox directory from `$TMPDIR/sandbox/` into `~/projects/`. Prompts fo
 ```bash
 harden                    # Harden current directory
 harden /path/to/sandbox   # Harden a specific directory
-harden -o                 # Harden and open in Cursor
+harden -o                 # Harden and open in VS Code
 ```
 
 ### `gld` — Get Last Download
@@ -96,4 +98,4 @@ src
 | `d`   | `cd ~/Desktop` |
 | `p`   | `cd ~/projects && ls` |
 | `dl`  | `cd ~/Downloads` |
-| `tc`  | Open bash-config in Cursor |
+| `tc`  | Open bash-config in VS Code |
