@@ -66,6 +66,7 @@ function install_brew_cask() {
     fi
 }
 
+
 # ── Tools ──────────────────────────────────────────────────────────────────────
 
 install_brew_package "git"
@@ -75,6 +76,8 @@ install_brew_package "duckdb"
 install_brew_package "fzf"
 install_brew_package "jq"
 install_brew_package "ripgrep" "rg"
+install_brew_package "tree"
+install_brew_package "ffmpeg"
 
 install_brew_cask "google-chrome" "/Applications/Google Chrome.app"
 install_brew_cask "visual-studio-code" "/Applications/Visual Studio Code.app"

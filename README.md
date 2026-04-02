@@ -91,6 +91,49 @@ Re-sources `~/.bashrc` and `~/.bash_profile` to pick up changes without restarti
 src
 ```
 
+### `g` — Go to git projects
+
+```bash
+g                         # cd ~/git
+echo "$(g)/my-repo"       # Print path (non-TTY mode, safe in subshells)
+```
+
+### `cdl` — cd + ls
+
+`cd` into a directory (resolving symlinks via `-P`) and immediately list its contents.
+
+```bash
+cdl ~/projects/my-repo
+cdl .                     # No args: ls current directory
+```
+
+### Finding alias candidates
+
+To see the most frequent first words in your shell history (useful for deciding what to alias):
+
+```bash
+history | awk '{print $2}' | sort | uniq -c | sort -rn | head -30
+```
+
+### `gif` — Create GIF from video
+
+Converts a video file (or clip) to an optimised GIF. Requires `ffmpeg` (installed by `setup.sh`).
+
+```bash
+gif video.mp4 output                    # Entire video at normal speed
+gif -s 5 video.mp4 output               # Start at 5 seconds
+gif -s 5 -e 15 -l 3 video.mp4 output    # Clip 5s–15s, compress to 3 second gif
+```
+
+### `gen` — Pseudorandom word generator
+
+Generates a dash-separated series of random words from the bundled wordlist. Useful for naming things.
+
+```bash
+gen                       # 5 words (default): cloud-river-maple-drift-stone
+gen -n 3                  # 3 words: river-maple-drift
+```
+
 ### Navigation aliases
 
 | Alias | Action |
