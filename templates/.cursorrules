@@ -1,0 +1,103 @@
+
+# Cursor Rules for Collaborative Development
+
+## Project Planning Approach
+### Rule 0: Keep current status in project-status.md
+Always read and update project-status.md to keep track of the current status of the project. If it doesn't exist, create it. 
+Modify it when something changes, and add new sections as needed.
+
+check out CONTEXT.md in subdirectories for more context on each part of the project. Keep your own notes on objectives in PROJECT-CONTEXT.md and keep it up to date as new information comes in.
+
+### 1. Context Gathering
+- **Always read existing files first** - understand the current state before making recommendations
+- **Examine project structure** - look at existing code, configuration files, and documentation
+- **Identify what's working** - acknowledge existing solutions and build upon them
+
+### 2. Architecture Planning
+- **Create comprehensive project plans** in markdown files that can be referenced later
+- **Use technical terminology** and explain concepts clearly
+- **Recommend industry best practices** with rationale for choices
+- **Consider scalability and maintainability** from the start
+
+### 3. Communication Style
+- **Ask clarifying questions** before implementation
+- **Provide multiple options** when appropriate
+- **Explain technical concepts** with definitions
+- **Use concrete examples** to illustrate abstract concepts
+- **Summarize key terms** at the end of explanations
+
+### 4. Implementation Strategy
+- **Start with foundation** - build core infrastructure first
+- **Use state machines** for complex workflows
+- **Implement idempotent operations** for reliability
+- **Plan for error handling** and recovery scenarios
+- **Document decisions** and rationale
+
+### 5. Code Organization
+- **Separate concerns** into logical modules
+- **Use descriptive function names** that explain purpose
+- **Implement proper error handling** with meaningful messages
+- **Add comprehensive logging** for debugging and monitoring
+- **Follow established patterns** in the codebase
+
+### 6. Testing and Validation
+- **Build incrementally** with validation at each step
+- **Use human-readable error messages** with actionable information
+- **Include relevant context** in error reports (URLs, document names, etc.)
+- **Plan for manual verification** steps where needed
+
+### 7. Documentation
+- **Maintain project plans** that evolve with implementation
+- **Document technical decisions** and their rationale
+- **Create clear next steps** for future sessions
+- **Include context for resuming** work after breaks
+
+## Technical Patterns
+
+### State Management
+- Use SQLite for ACID-compliant state tracking
+- Implement state machines for complex workflows
+- Include audit trails and timestamps
+- Plan for resume capability
+
+### Error Handling
+- Provide detailed error messages with context
+- Include actionable information for debugging
+- Use structured error reporting
+- Plan for graceful degradation
+
+### Content Processing
+- Use pipeline patterns for data transformation
+- Implement idempotent operations
+- Plan for extensibility and future requirements
+- Include validation at each step
+
+## Collaboration Guidelines
+
+### Question Format
+When asking clarifying questions:
+1. **Group related questions** logically
+2. **Provide context** for why the question matters
+3. **Offer examples** when helpful
+4. **Acknowledge trade-offs** in different approaches
+
+### Response Style
+When responding to user input:
+1. **Acknowledge understanding** of requirements
+2. **Update project plans** with new information
+3. **Identify next steps** clearly
+4. **Ask follow-up questions** when needed
+5. **Provide context** for future sessions
+
+### Implementation Notes
+- **Don't rush to code** - plan thoroughly first
+- **Build incrementally** with validation
+- **Document decisions** and rationale
+- **Plan for maintenance** and future changes
+
+## Project Resumption Context
+
+### Key Files to Check First
+1. **project-status.md** - Current project status and progress
+2. **NEXT_SESSION.md** - Quick reference for immediate next steps
+3. **project-plan.md** - Overall architecture and technical decisions
