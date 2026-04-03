@@ -1,7 +1,7 @@
 #!/bin/bash
 # Sourced from ~/.bash_profile && ~/.bashrc
 
-dotfiles_dir="${HOME}/git/bash-config"
+dotfiles_dir="${BASH_CONFIG_DIR}"
 
 alias python='python3'
 
@@ -393,3 +393,207 @@ function src() {
     source "${HOME}/.bashrc"
     source "${HOME}/.bash_profile"
 }
+
+
+function g() {
+    # cd to ~/git if called in a terminal; print the path if used in a pipe/subshell
+    custom_command "Git Projects"
+    local dir="${HOME}/git"
+    if [ -t 1 ]; then
+        cd "${dir}" || return
+    else
+        echo "${dir}"
+    fi
+}
+
+
+function cdl() {
+    custom_command "cdl"
+    if [[ $# -eq 1 ]]; then
+        builtin cd -P "$1" && ls
+    else
+        ls .
+    fi
+}
+
+
+
+function gif() {
+    custom_command "gif - create a gif from a video"
+    unset OPTIND
+    unset OPTARG
+
+    local length=""
+    local start=""
+    local end=""
+
+    function show_help {
+        echo "Usage: gif [options] input_video output.gif"
+        echo ""
+        echo "Options:"
+        echo "  -l <seconds>  Target length of the output GIF in seconds (speeds up the video to fit)"
+        echo "  -s <seconds>  Start time in the video"
+        echo "  -e <seconds>  End time in the video"
+        echo "  -h            Show this help message"
+        echo ""
+        echo "Examples:"
+        echo "  gif video.mp4 output                    # Convert entire video at normal speed"
+        echo "  gif -s 5 video.mp4 output               # Start at 5 seconds, normal speed"
+        echo "  gif -l 3 video.mp4 output               # Speed up entire video to be a 3 second gif"
+        echo "  gif -s 5 -e 15 -l 3 video.mp4 output    # Clip from 5s-15s and compress to 3 second gif"
+    }
+
+    local OPTIND=1
+    while getopts "hl:s:e:" opt; do
+        case "${opt}" in
+            h)
+                show_help
+                return 0
+                ;;
+            l)
+                length="${OPTARG}"
+                ;;
+            s)
+                start="${OPTARG}"
+                ;;
+            e)
+                end="${OPTARG}"
+                ;;
+            \?)
+                echo "Invalid option: -${OPTARG}" >&2
+                show_help
+                return 1
+                ;;
+        esac
+    done
+
+    shift $((OPTIND-1))
+
+    if [ $# -lt 2 ]; then
+        echo "Error: Missing input or output file paths" >&2
+        show_help
+        return 1
+    fi
+
+    local input="$1"
+    local output="$2"
+
+    if [[ "${output}" != *.gif ]]; then
+        output="${output}.gif"
+        echo "Adding .gif extension to output filename: ${output}"
+    fi
+
+    input="${input/#\~/${HOME}}"
+    output="${output/#\~/${HOME}}"
+
+    if [ ! -f "${input}" ]; then
+        echo "Error: Input file does not exist: ${input}" >&2
+        return 1
+    fi
+
+    if ! command -v ffmpeg &>/dev/null; then
+        echo "Error: ffmpeg is required. Install with: brew install ffmpeg" >&2
+        return 1
+    fi
+
+    local temp_clip
+    temp_clip=$(mktemp -t gif_clip_).mp4
+
+    function cleanup {
+        if [ -f "${temp_clip}" ]; then
+            rm -f "${temp_clip}"
+        fi
+    }
+
+    trap cleanup EXIT
+
+    local clip_cmd="ffmpeg -hide_banner -y"
+
+    if [ -n "${start}" ]; then
+        clip_cmd="${clip_cmd} -ss ${start}"
+    fi
+
+    clip_cmd="${clip_cmd} -i \"${input}\""
+
+    if [ -n "${end}" ]; then
+        if [ -n "${start}" ]; then
+            local duration
+            duration=$(echo "${end} - ${start}" | bc)
+            clip_cmd="${clip_cmd} -t ${duration}"
+        else
+            clip_cmd="${clip_cmd} -t ${end}"
+        fi
+    fi
+
+    clip_cmd="${clip_cmd} -c copy \"${temp_clip}\""
+
+    echo "Creating temporary clip..."
+    if ! eval "${clip_cmd}"; then
+        echo "Error: Failed to create temporary clip" >&2
+        return 1
+    fi
+
+    local speed_filter=""
+    if [ -n "${length}" ]; then
+        local clip_duration
+        clip_duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "${temp_clip}")
+        local speedup_factor
+        speedup_factor=$(echo "scale=2; ${clip_duration} / ${length}" | bc)
+        echo "Clip duration: ${clip_duration}s → target: ${length}s (${speedup_factor}x speed)"
+        speed_filter=",setpts=PTS/${speedup_factor}"
+    fi
+
+    local gif_cmd="ffmpeg -hide_banner -y -i \"${temp_clip}\""
+    gif_cmd="${gif_cmd} -vf \"fps=10,scale=720:-1:flags=lanczos${speed_filter},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse\" -loop 0 \"${output}\""
+
+    echo "Converting to GIF..."
+    if ! eval "${gif_cmd}"; then
+        echo "Error: Failed to create GIF" >&2
+        return 1
+    fi
+
+    if [ -f "${output}" ]; then
+        echo "GIF created: ${output}"
+        cleanup
+        return 0
+    else
+        echo "Error: Failed to create GIF" >&2
+        return 1
+    fi
+}
+
+
+function gen() {
+    custom_command "gen - pseudorandom word series generator"
+    local words_file="${dotfiles_dir}/alias_support/wordlists/wordlist.txt"
+    local count=5
+    local result=""
+
+    local OPTIND=1
+    while getopts "n:h" opt; do
+        case "${opt}" in
+            n) count="${OPTARG}" ;;
+            h)
+                echo "Usage: gen [-n <count>]"
+                echo "  Generate a dash-separated series of random words"
+                echo "  -n  Number of words (default: 5)"
+                return 0
+                ;;
+            \?) return 1 ;;
+        esac
+    done
+
+    for ((i=0; i<count; i++)); do
+        local word
+        word=$(awk -v seed=${RANDOM} 'BEGIN {srand(seed);} {lines[NR] = $0} END {print lines[int(NR * rand()) + 1]}' "${words_file}")
+        if [ -z "${result}" ]; then
+            result="${word}"
+        else
+            result="${result}-${word}"
+        fi
+    done
+
+    echo "${result}"
+}
+
+
