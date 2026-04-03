@@ -5,10 +5,12 @@ A minimal, opinionated bash configuration for macOS. Provides a clean prompt, us
 ## Install
 
 ```bash
-git clone https://github.com/<your-username>/bash-config.git ~/git/bash-config
-bash ~/git/bash-config/setup/setup.sh
+git clone https://github.com/andreweduncan/bash-config.git
+bash bash-config/setup/setup.sh
 # Restart your terminal (or: source ~/.bash_profile)
 ```
+
+Clone anywhere you like — `setup.sh` detects its own location automatically.
 
 `setup.sh` is idempotent — safe to run again after pulling updates.
 
