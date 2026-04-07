@@ -139,12 +139,15 @@ function sb() {
         esac
     done
 
-    # Generate random name if none provided
+    # Generate random name if none provided, retrying on collision
     if [ -z "${filename}" ]; then
-        local word1 word2
-        word1=$(pseudorandom_word)
-        word2=$(pseudorandom_word)
-        filename="${word1}-${word2}"
+        while true; do
+            local word1 word2
+            word1=$(pseudorandom_word)
+            word2=$(pseudorandom_word)
+            filename="${word1}-${word2}"
+            [ ! -d "${dirpath}/${filename}" ] && break
+        done
     fi
 
     echo "Creating sandbox directory: ${filename}..."
