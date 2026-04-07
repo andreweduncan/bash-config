@@ -148,17 +148,14 @@ function sb() {
     fi
 
     echo "Creating sandbox directory: ${filename}..."
-    local temp_dir
-    temp_dir=$(mktemp -d "${dirpath}/${filename}.XXXXXX")
+    local temp_dir="${dirpath}/${filename}"
+    mkdir -p "${temp_dir}"
     cd "${temp_dir}" || return 1
-
-    local actual_dir_name
-    actual_dir_name=$(basename "${temp_dir}")
 
     # Write .sbconfig metadata
     {
         echo "# Sandbox Configuration"
-        echo "original_name=${actual_dir_name}"
+        echo "original_name=${filename}"
         echo "custom_name=${custom_name}"
         echo "project_identifier=${filename}-$(pseudorandom_word)"
         echo "sandbox_id=$(echo "${filename}-$(date +%s)-${RANDOM}" | shasum -a 256 | cut -d ' ' -f1)"
