@@ -82,6 +82,21 @@ install_brew_package "ffmpeg"
 install_brew_cask "google-chrome" "/Applications/Google Chrome.app"
 install_brew_cask "visual-studio-code" "/Applications/Visual Studio Code.app"
 
+# ── Git repo ──────────────────────────────────────────────────────────────────
+
+# If a user doesn't have git installed when running the readme setup, the readme command downloads the repo as a tarball via a curl command. This logic links those files to the github repo once git is installed.
+REPO_URL="https://github.com/andreweduncan/bash-config.git"
+
+if ! git -C "${BASH_CONFIG_DIR}" rev-parse --git-dir &>/dev/null; then
+    echo "Converting directory to a git repo..."
+    git -C "${BASH_CONFIG_DIR}" init -b main
+    git -C "${BASH_CONFIG_DIR}" remote add origin "${REPO_URL}"
+    git -C "${BASH_CONFIG_DIR}" fetch origin
+    git -C "${BASH_CONFIG_DIR}" reset origin/main
+    git -C "${BASH_CONFIG_DIR}" branch --set-upstream-to=origin/main main
+    echo "✅ Linked bash-config directory to git repo (git pull will work for future updates)"
+fi
+
 # ── Dotfiles ───────────────────────────────────────────────────────────────────
 
 function add_source_line() {

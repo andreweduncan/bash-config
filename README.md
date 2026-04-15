@@ -4,8 +4,15 @@ A minimal, opinionated bash configuration for macOS. Provides a clean prompt, us
 
 ## Install
 
+Paste this into Terminal. It works even if you don't have git installed yet — the script detects what's available and does the right thing.
+
 ```bash
-git clone https://github.com/andreweduncan/bash-config.git
+if command -v git &>/dev/null; then
+  git clone https://github.com/andreweduncan/bash-config.git
+else
+  curl -fsSL https://github.com/andreweduncan/bash-config/archive/main.tar.gz | tar xz
+  mv bash-config-main bash-config
+fi
 bash bash-config/setup/setup.sh
 # Restart your terminal (or: source ~/.bash_profile)
 ```
@@ -132,8 +139,8 @@ gif -s 5 -e 15 -l 3 video.mp4 output    # Clip 5s–15s, compress to 3 second gi
 Generates a dash-separated series of random words from the bundled wordlist. Useful for naming things.
 
 ```bash
-gen                       # 5 words (default): cloud-river-maple-drift-stone
-gen -n 3                  # 3 words: river-maple-drift
+gen                       # 5 words (default): cloud-river-maple-stone-drift
+gen -n 3                  # 3 words: cloud-river-maple
 ```
 
 ### Navigation aliases
