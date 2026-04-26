@@ -77,17 +77,30 @@ else
     hostStyle="${yellow}"
 fi
 
-PS1="\[\033]0;\W\007\]"       # window title: working directory base name
-PS1+="\[${bold}\]\n"
-PS1+="\[${userStyle}\]\u"     # username
-PS1+="\[${white}\] at "
-PS1+="\[${hostStyle}\]\h"     # hostname
-PS1+="\[${white}\] in "
-PS1+="\[${green}\]\w"         # full working directory path
-PS1+="\$(prompt_git \"\[${white}\] on \[${violet}\]\" \"\[${blue}\]\")"
-PS1+="\n"
-PS1+="\[${white}\]\$ \[${reset}\]"
-export PS1
+set_prompt() {
+    local exit_code=$?
+    history -a
+
+    PS1="\[\033]0;\W\007\]"       # window title: working directory base name
+    PS1+="\[${bold}\]\n"
+    PS1+="\[${userStyle}\]\u"     # username
+    PS1+="\[${white}\] at "
+    PS1+="\[${hostStyle}\]\h"     # hostname
+    PS1+="\[${white}\] in "
+    PS1+="\[${green}\]\w"         # full working directory path
+    PS1+="$(prompt_git "\[${white}\] on \[${violet}\]" "\[${blue}\]")"
+    if [[ ${exit_code} -ne 0 ]]; then
+        PS1+="\[${red}\] exit:${exit_code} "
+    fi
+    PS1+="\n"
+    if [[ ${exit_code} -ne 0 ]]; then
+        PS1+="\[${red}\]● "
+    else
+        PS1+="\[${blue}\]● "
+    fi
+    PS1+="\[${white}\]\$ \[${reset}\]"
+}
+PROMPT_COMMAND=set_prompt
 
 PS2="\[${yellow}\]→ \[${reset}\]"
 export PS2
