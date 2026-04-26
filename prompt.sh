@@ -93,11 +93,6 @@ set_prompt() {
         PS1+="\[${red}\] exit:${exit_code} "
     fi
     PS1+="\n"
-    if [[ ${exit_code} -ne 0 ]]; then
-        PS1+="\[${red}\]● "
-    else
-        PS1+="\[${blue}\]● "
-    fi
     PS1+="\[${white}\]\$ \[${reset}\]"
 }
 PROMPT_COMMAND=set_prompt
