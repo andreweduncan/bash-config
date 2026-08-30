@@ -53,6 +53,7 @@ if tput setaf 1 &>/dev/null; then
     violet=$(tput setaf 61)
     white=$(tput setaf 15)
     yellow=$(tput setaf 136)
+    redbg=$(tput setab 124) # red background, for the error badge
 else
     bold=''
     reset="\e[0m"
@@ -63,6 +64,7 @@ else
     violet="\e[1;35m"
     white="\e[1;37m"
     yellow="\e[1;33m"
+    redbg="\e[41m" # red background, for the error badge
 fi
 
 if [[ "${USER}" == "root" ]]; then
@@ -90,7 +92,9 @@ set_prompt() {
     PS1+="\[${green}\]\w"         # full working directory path
     PS1+="$(prompt_git "\[${white}\] on \[${violet}\]" "\[${blue}\]")"
     if [[ ${exit_code} -ne 0 ]]; then
-        PS1+="\[${red}\] exit:${exit_code} "
+        # Bold white text on a red background so a failed command is obvious,
+        # while keeping the `exit:N` code visible.
+        PS1+="\[${white}\] \[${bold}${white}${redbg}\] ✘ exit:${exit_code} \[${reset}\]"
     fi
     PS1+="\n"
     PS1+="\[${white}\]\$ \[${reset}\]"
