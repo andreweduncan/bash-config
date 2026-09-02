@@ -3,12 +3,19 @@
 
 dotfiles_dir="${BASH_CONFIG_DIR}"
 
+# Command history with exit-code logging (see `hist -h`)
+# shellcheck source=scripts/history/hist.sh
+source "${dotfiles_dir}/scripts/history/hist.sh"
+
 alias python='python3'
 
 alias sudo='sudo ' # Enable aliases to be sudo'd
 alias d='custom_command "Desktop"; command cd "${HOME}/Desktop"'
 alias p='custom_command "projects"; command cd "${HOME}/projects" && ls'
 alias dl='custom_command "Downloads"; command cd "${HOME}/Downloads"'
+alias ..='custom_command ".."; command cd ..'
+alias ...='custom_command "..."; command cd ../..'
+alias ....='custom_command "...."; command cd ../../..'
 alias tc='custom_command "bash-config"; command code "${dotfiles_dir}"'
 alias TC='tc'
 
