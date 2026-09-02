@@ -143,11 +143,31 @@ gen                       # 5 words (default): cloud-river-maple-stone-drift
 gen -n 3                  # 3 words: cloud-river-maple
 ```
 
+### `hist` — Command history with exit codes
+
+Logs every command (with its exit code and a timestamp) to `~/.bash_command_log`
+via a `PROMPT_COMMAND` hook, and queries that log. Fields are tab-separated
+(`command <TAB> exit_code <TAB> timestamp`), and terminal output is colorized
+(green for zero exits, red for failures).
+
+```bash
+hist                      # Last 20 log lines
+hist 50                   # Last 50 log lines
+hist git                  # Lines whose command contains "git"
+hist -f                   # Only failures (nonzero exit)
+hist -f 10                # Last 10 failures
+hist | cut -f1            # Just the commands (tab-separated fields)
+hist -h                   # Help
+```
+
 ### Navigation aliases
 
-| Alias | Action |
-|-------|--------|
-| `d`   | `cd ~/Desktop` |
-| `p`   | `cd ~/projects && ls` |
-| `dl`  | `cd ~/Downloads` |
-| `tc`  | Open bash-config in VS Code |
+| Alias  | Action |
+|--------|--------|
+| `d`    | `cd ~/Desktop` |
+| `p`    | `cd ~/projects && ls` |
+| `dl`   | `cd ~/Downloads` |
+| `tc`   | Open bash-config in VS Code |
+| `..`   | `cd ..` |
+| `...`  | `cd ../..` |
+| `....` | `cd ../../..` |
