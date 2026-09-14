@@ -12,7 +12,7 @@
 #   Arch:                      sudo pacman -S ffmpeg
 #   macOS (Homebrew):          brew install ffmpeg
 #
-# Usage:  gif [options] input_video output.gif
+# Usage:  gif [options] input_video
 # Run `gif -h` for details.
 
 set -u
@@ -22,22 +22,26 @@ set -u
 # ---------------------------------------------------------------------------
 show_help() {
     cat <<'EOF'
-Usage: gif [options] input_video output.gif
+Usage: gif [options] input_video
 
-Create a GIF from a video file.
+Create a GIF from a video file. Only the input video is required; by default
+the GIF is written next to it with the same name and a .gif extension.
 
 Options:
+  -o <path>     Output GIF path (default: input path with a .gif extension)
   -l <seconds>  Target length of the output GIF in seconds (speeds up the
                 video to fit the target length)
   -s <seconds>  Start time in the video
   -e <seconds>  End time in the video
+  -f            Overwrite the output if it already exists (skip the prompt)
   -h            Show this help message
 
 Examples:
-  gif video.mp4 output                    # Convert entire video at normal speed
-  gif -s 5 video.mp4 output               # Start at 5 seconds, normal speed
-  gif -l 3 video.mp4 output               # Speed up entire video to a 3 second gif
-  gif -s 5 -e 15 -l 3 video.mp4 output    # Clip 00:05 to 00:15, make it a 3s gif
+  gif video.mp4                              # Convert entire video, writes video.gif alongside it
+  gif -o out.gif video.mp4                   # Convert entire video, save to out.gif
+  gif -s 5 video.mp4                         # Start at 5 seconds, normal speed
+  gif -l 3 video.mp4                         # Speed up entire video to a 3 second gif
+  gif -s 5 -e 15 -l 3 -o clip.gif video.mp4  # Clip 00:05-00:15 into a 3 second gif at clip.gif
 EOF
 }
 
@@ -78,13 +82,15 @@ main() {
     require_dep ffmpeg  || return 1
     require_dep ffprobe || return 1
 
-    local length="" start="" end=""
+    local length="" start="" end="" output="" force=""
 
     # Parse options
     local OPTIND=1 opt
-    while getopts "hl:s:e:" opt; do
+    while getopts "hfo:l:s:e:" opt; do
         case "${opt}" in
             h) show_help; return 0 ;;
+            f) force=1 ;;
+            o) output="${OPTARG}" ;;
             l) length="${OPTARG}" ;;
             s) start="${OPTARG}" ;;
             e) end="${OPTARG}" ;;
@@ -93,32 +99,60 @@ main() {
     done
     shift $((OPTIND - 1))
 
-    if [ $# -lt 2 ]; then
-        echo "Error: Missing input or output file paths" >&2
+    # Only the input video is required
+    if [ $# -lt 1 ]; then
+        echo "Error: Missing input file path" >&2
         echo "" >&2
         show_help
         return 1
     fi
 
     local input="$1"
-    local output="$2"
-
-    # Add .gif extension if not already present
-    case "${output}" in
-        *.gif) ;;
-        *)
-            output="${output}.gif"
-            echo "Adding .gif extension to output filename: ${output}"
-            ;;
-    esac
-
-    # Expand a leading tilde in paths
     input="${input/#\~/${HOME}}"
-    output="${output/#\~/${HOME}}"
+
+    # Resolve the output path.
+    if [ -z "${output}" ]; then
+        # Default: next to the input, same name with a .gif extension.
+        local input_dir input_base
+        input_dir=$(dirname "${input}")
+        input_base=$(basename "${input}")
+        output="${input_dir}/${input_base%.*}.gif"
+        echo "No output specified, using: ${output}"
+    else
+        output="${output/#\~/${HOME}}"
+        case "${output}" in
+            *.gif) ;;
+            *)
+                output="${output}.gif"
+                echo "Adding .gif extension to output filename: ${output}"
+                ;;
+        esac
+    fi
 
     if [ ! -f "${input}" ]; then
         echo "Error: Input file does not exist: ${input}" >&2
         return 1
+    fi
+
+    # Guard against clobbering an existing output, before any ffmpeg work runs.
+    # -f always wins; otherwise prompt only when a human is present (stdin is a
+    # terminal) so we never hang inside a pipeline or script.
+    if [ -z "${force}" ] && [ -e "${output}" ]; then
+        if [ -t 0 ]; then
+            local reply=""
+            printf 'Output already exists: %s\nOverwrite? [y/N] ' "${output}" >&2
+            read -r reply
+            case "${reply}" in
+                [yY] | [yY][eE][sS]) ;;
+                *)
+                    echo "Aborted: not overwriting ${output}" >&2
+                    return 1
+                    ;;
+            esac
+        else
+            echo "Error: Output already exists: ${output} (pass -f to overwrite)" >&2
+            return 1
+        fi
     fi
 
     # Create temporary clip file. Use a template with XXXXXX so this works on

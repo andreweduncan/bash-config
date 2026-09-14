@@ -36,25 +36,34 @@ If you'd rather not put it on your `PATH`, you can always run it directly:
 ## Usage
 
 ```
-gif [options] input_video output.gif
+gif [options] input_video
 
 Options:
+  -o <path>     Output GIF path (default: input path with a .gif extension)
   -l <seconds>  Target length of the output GIF in seconds (speeds up the
                 video to fit the target length)
   -s <seconds>  Start time in the video
   -e <seconds>  End time in the video
+  -f            Overwrite the output if it already exists (skip the prompt)
   -h            Show this help message
 ```
 
-The `.gif` extension is added to the output name automatically if you leave it off.
+Only the input video is required. With no `-o`, the GIF is written **next to the
+input** with the same name and a `.gif` extension (e.g. `clip.mov` → `clip.gif`).
+When you do pass `-o`, the `.gif` extension is added automatically if you leave
+it off.
+
+If the output already exists, `gif` asks before overwriting (or errors out when
+run non-interactively). Pass `-f` to overwrite without prompting.
 
 ## Examples
 
 ```bash
-gif video.mp4 output                    # Convert entire video at normal speed
-gif -s 5 video.mp4 output               # Start at 5 seconds, normal speed
-gif -l 3 video.mp4 output               # Speed up entire video to a 3 second gif
-gif -s 5 -e 15 -l 3 video.mp4 output    # Clip 00:05–00:15 into a 3 second gif
+gif video.mp4                              # Convert entire video, writes video.gif alongside it
+gif -o out.gif video.mp4                   # Save to a specific path
+gif -s 5 video.mp4                         # Start at 5 seconds, normal speed
+gif -l 3 video.mp4                         # Speed up entire video to a 3 second gif
+gif -s 5 -e 15 -l 3 -o clip.gif video.mp4  # Clip 00:05–00:15 into a 3 second gif
 ```
 
 ## What it does
