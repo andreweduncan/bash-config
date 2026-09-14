@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+#
+# gif - create a GIF from a video using ffmpeg
+#
+# Standalone, portable version. Works on macOS and Linux (Pop!OS, Ubuntu, etc.).
+# The only runtime dependencies are ffmpeg and ffprobe (both ship in the `ffmpeg`
+# package on every major platform). No other tools, no shell config required.
+#
+# Install the dependency:
+#   Pop!OS / Ubuntu / Debian:  sudo apt install ffmpeg
+#   Fedora:                    sudo dnf install ffmpeg
+#   Arch:                      sudo pacman -S ffmpeg
+#   macOS (Homebrew):          brew install ffmpeg
+#
+# Usage:  gif [options] input_video
+# Run `gif -h` for details.
+
+set -u
+
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
+show_help() {
+    cat <<'EOF'
+Usage: gif [options] input_video
+
+Create a GIF from a video file. Only the input video is required; by default
+the GIF is written next to it with the same name and a .gif extension.
+
+Options:
+  -o <path>     Output GIF path (default: input path with a .gif extension)
+  -l <seconds>  Target length of the output GIF in seconds (speeds up the
+                video to fit the target length)
+  -s <seconds>  Start time in the video
+  -e <seconds>  End time in the video
+  -f            Overwrite the output if it already exists (skip the prompt)
+  -h            Show this help message
+
+Examples:
+  gif video.mp4                              # Convert entire video, writes video.gif alongside it
+  gif -o out.gif video.mp4                   # Convert entire video, save to out.gif
+  gif -s 5 video.mp4                         # Start at 5 seconds, normal speed
+  gif -l 3 video.mp4                         # Speed up entire video to a 3 second gif
+  gif -s 5 -e 15 -l 3 -o clip.gif video.mp4  # Clip 00:05-00:15 into a 3 second gif at clip.gif
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Dependency check
+# ---------------------------------------------------------------------------
+require_dep() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Error: required program '$1' is not installed or not on PATH." >&2
+        echo "" >&2
+        echo "Install ffmpeg (provides both ffmpeg and ffprobe):" >&2
+        echo "  Pop!OS / Ubuntu / Debian:  sudo apt install ffmpeg" >&2
+        echo "  Fedora:                    sudo dnf install ffmpeg" >&2
+        echo "  Arch:                      sudo pacman -S ffmpeg" >&2
+        echo "  macOS (Homebrew):          brew install ffmpeg" >&2
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Portable float arithmetic (no bc dependency; awk is guaranteed present)
+# ---------------------------------------------------------------------------
+fsub() { awk "BEGIN { printf \"%s\", ($1) - ($2) }"; }
+fdiv() { awk "BEGIN { printf \"%.2f\", ($1) / ($2) }"; }
+
+# ---------------------------------------------------------------------------
+# Temp-file cleanup. TEMP_CLIP is a script global so the EXIT trap can see it
+# after main() returns and its locals go out of scope (matters under `set -u`).
+# ---------------------------------------------------------------------------
+TEMP_CLIP=""
+cleanup() { [ -n "${TEMP_CLIP}" ] && rm -f "${TEMP_CLIP}"; }
+trap cleanup EXIT
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+main() {
+    require_dep ffmpeg  || return 1
+    require_dep ffprobe || return 1
+
+    local length="" start="" end="" output="" force=""
+
+    # Parse options
+    local OPTIND=1 opt
+    while getopts "hfo:l:s:e:" opt; do
+        case "${opt}" in
+            h) show_help; return 0 ;;
+            f) force=1 ;;
+            o) output="${OPTARG}" ;;
+            l) length="${OPTARG}" ;;
+            s) start="${OPTARG}" ;;
+            e) end="${OPTARG}" ;;
+            \?) show_help; return 1 ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    # Only the input video is required
+    if [ $# -lt 1 ]; then
+        echo "Error: Missing input file path" >&2
+        echo "" >&2
+        show_help
+        return 1
+    fi
+
+    local input="$1"
+    input="${input/#\~/${HOME}}"
+
+    # Resolve the output path.
+    if [ -z "${output}" ]; then
+        # Default: next to the input, same name with a .gif extension.
+        local input_dir input_base
+        input_dir=$(dirname "${input}")
+        input_base=$(basename "${input}")
+        output="${input_dir}/${input_base%.*}.gif"
+        echo "No output specified, using: ${output}"
+    else
+        output="${output/#\~/${HOME}}"
+        case "${output}" in
+            *.gif) ;;
+            *)
+                output="${output}.gif"
+                echo "Adding .gif extension to output filename: ${output}"
+                ;;
+        esac
+    fi
+
+    if [ ! -f "${input}" ]; then
+        echo "Error: Input file does not exist: ${input}" >&2
+        return 1
+    fi
+
+    # Guard against clobbering an existing output, before any ffmpeg work runs.
+    # -f always wins; otherwise prompt only when a human is present (stdin is a
+    # terminal) so we never hang inside a pipeline or script.
+    if [ -z "${force}" ] && [ -e "${output}" ]; then
+        if [ -t 0 ]; then
+            local reply=""
+            printf 'Output already exists: %s\nOverwrite? [y/N] ' "${output}" >&2
+            read -r reply
+            case "${reply}" in
+                [yY] | [yY][eE][sS]) ;;
+                *)
+                    echo "Aborted: not overwriting ${output}" >&2
+                    return 1
+                    ;;
+            esac
+        else
+            echo "Error: Output already exists: ${output} (pass -f to overwrite)" >&2
+            return 1
+        fi
+    fi
+
+    # Create temporary clip file. Use a template with XXXXXX so this works on
+    # both GNU/Linux mktemp and BSD/macOS mktemp.
+    local temp_clip
+    temp_clip=$(mktemp "${TMPDIR:-/tmp}/gif_clip_XXXXXX") || {
+        echo "Error: Failed to create temporary file" >&2
+        return 1
+    }
+    mv "${temp_clip}" "${temp_clip}.mp4"
+    temp_clip="${temp_clip}.mp4"
+    TEMP_CLIP="${temp_clip}"
+
+    # -- Step 1: extract the clip -------------------------------------------
+    local -a clip_cmd=(ffmpeg -hide_banner -y)
+    [ -n "${start}" ] && clip_cmd+=(-ss "${start}")
+    clip_cmd+=(-i "${input}")
+    if [ -n "${end}" ]; then
+        if [ -n "${start}" ]; then
+            clip_cmd+=(-t "$(fsub "${end}" "${start}")")
+        else
+            clip_cmd+=(-t "${end}")
+        fi
+    fi
+    clip_cmd+=(-c copy "${temp_clip}")
+
+    echo "Creating temporary clip..."
+    if ! "${clip_cmd[@]}"; then
+        echo "Error: Failed to create temporary clip" >&2
+        return 1
+    fi
+
+    # -- Step 2: compute optional speed-up ----------------------------------
+    local speed_filter=""
+    if [ -n "${length}" ]; then
+        local clip_duration speedup_factor
+        clip_duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "${temp_clip}")
+        speedup_factor=$(fdiv "${clip_duration}" "${length}")
+
+        echo "Clip duration: ${clip_duration} seconds"
+        echo "Target length: ${length} seconds"
+        echo "Speed factor:  ${speedup_factor}x"
+
+        speed_filter=",setpts=PTS/${speedup_factor}"
+    fi
+
+    # -- Step 3: convert to GIF with a generated palette --------------------
+    echo "Converting clip to GIF..."
+    if ! ffmpeg -hide_banner -y -i "${temp_clip}" \
+        -vf "fps=10,scale=720:-1:flags=lanczos${speed_filter},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" \
+        -loop 0 "${output}"; then
+        echo "Error: Failed to create GIF" >&2
+        return 1
+    fi
+
+    if [ -f "${output}" ]; then
+        echo "GIF created successfully: ${output}"
+        return 0
+    fi
+
+    echo "Error: Failed to create GIF" >&2
+    return 1
+}
+
+main "$@"
