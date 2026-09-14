@@ -426,7 +426,7 @@ function cdl() {
 
 
 function gif() {
-    custom_command "gif - create a gif from a video"
+    custom_command "gif - an ffmpeg wrapper for quickly creating gifs from videos"
     # Thin wrapper: delegates to the standalone, portable script in
     # programs/gif/gif (the same file shared with others). All argument
     # parsing and ffmpeg work lives there. Run `gif -h` for usage.
