@@ -126,13 +126,17 @@ history | awk '{print $2}' | sort | uniq -c | sort -rn | head -30
 
 ### `gif` — Create GIF from video
 
-Converts a video file (or clip) to an optimised GIF. Requires `ffmpeg` (installed by `setup.sh`).
+An ffmpeg wrapper for quickly creating optimised GIFs from videos. Requires `ffmpeg` (installed by `setup.sh`). Only the input is required; with no `-o` the GIF is written next to it (`clip.mov` → `clip.gif`). Every flag has a short and long form. See `gif -h` for all options.
 
 ```bash
-gif video.mp4 output                    # Entire video at normal speed
-gif -s 5 video.mp4 output               # Start at 5 seconds
-gif -s 5 -e 15 -l 3 video.mp4 output    # Clip 5s–15s, compress to 3 second gif
+gif video.mp4                              # Entire video, writes video.gif alongside it
+gif -o out.gif video.mp4                   # Save to a specific path
+gif -s 5 video.mp4                         # Start at 5 seconds
+gif -s 5 -e 15 -l 3 -o clip.gif video.mp4  # Clip 5s–15s, compress to 3 second gif
+gif -v video.mp4                           # Verbose: show ffmpeg's full output
 ```
+
+Quiet by default — on success it prints only the output path (interactive terminals still show ffmpeg's live progress line). Pass `-v`/`--verbose` for full ffmpeg output.
 
 ### `gen` — Pseudorandom word generator
 

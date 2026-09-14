@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# gif - create a GIF from a video using ffmpeg
+# gif - an ffmpeg wrapper for quickly creating GIFs from videos
 #
 # Standalone, portable version. Works on macOS and Linux (Pop!OS, Ubuntu, etc.).
 # The only runtime dependencies are ffmpeg and ffprobe (both ship in the `ffmpeg`
@@ -24,17 +24,26 @@ show_help() {
     cat <<'EOF'
 Usage: gif [options] input_video
 
-Create a GIF from a video file. Only the input video is required; by default
-the GIF is written next to it with the same name and a .gif extension.
+An ffmpeg wrapper for quickly creating GIFs from videos. Only the input video
+is required; by default the GIF is written next to it with the same name and a
+.gif extension.
 
 Options:
-  -o <path>     Output GIF path (default: input path with a .gif extension)
-  -l <seconds>  Target length of the output GIF in seconds (speeds up the
-                video to fit the target length)
-  -s <seconds>  Start time in the video
-  -e <seconds>  End time in the video
-  -f            Overwrite the output if it already exists (skip the prompt)
-  -h            Show this help message
+  -o, --output <path>     Output GIF path (default: input path with a .gif
+                          extension)
+  -l, --length <seconds>  Target length of the output GIF in seconds (speeds up
+                          the video to fit the target length)
+  -s, --start <seconds>   Start time in the video
+  -e, --end <seconds>     End time in the video
+  -f, --force             Overwrite the output if it already exists (skip the
+                          prompt)
+  -v, --verbose           Show ffmpeg's full output and per-step progress
+                          messages (default: quiet, errors only)
+  -h, --help              Show this help message
+
+By default gif is quiet: on success it prints only the final output path. When
+writing to an interactive terminal it still shows ffmpeg's live one-line
+progress readout; pass -v/--verbose for the full ffmpeg output.
 
 Examples:
   gif video.mp4                              # Convert entire video, writes video.gif alongside it
@@ -42,6 +51,7 @@ Examples:
   gif -s 5 video.mp4                         # Start at 5 seconds, normal speed
   gif -l 3 video.mp4                         # Speed up entire video to a 3 second gif
   gif -s 5 -e 15 -l 3 -o clip.gif video.mp4  # Clip 00:05-00:15 into a 3 second gif at clip.gif
+  gif -v video.mp4                           # Verbose: show ffmpeg's full output
 EOF
 }
 
@@ -68,6 +78,13 @@ fsub() { awk "BEGIN { printf \"%s\", ($1) - ($2) }"; }
 fdiv() { awk "BEGIN { printf \"%.2f\", ($1) / ($2) }"; }
 
 # ---------------------------------------------------------------------------
+# Status logging. Quiet by default; VERBOSE is set from -v/--verbose in main().
+# Errors always print (via plain `echo ... >&2`); these progress lines don't.
+# ---------------------------------------------------------------------------
+VERBOSE=""
+log() { [ -n "${VERBOSE}" ] && echo "$@"; return 0; }
+
+# ---------------------------------------------------------------------------
 # Temp-file cleanup. TEMP_CLIP is a script global so the EXIT trap can see it
 # after main() returns and its locals go out of scope (matters under `set -u`).
 # ---------------------------------------------------------------------------
@@ -82,22 +99,60 @@ main() {
     require_dep ffmpeg  || return 1
     require_dep ffprobe || return 1
 
-    local length="" start="" end="" output="" force=""
+    local length="" start="" end="" output="" force="" verbose=""
+    local -a positional=()
 
-    # Parse options
-    local OPTIND=1 opt
-    while getopts "hfo:l:s:e:" opt; do
-        case "${opt}" in
-            h) show_help; return 0 ;;
-            f) force=1 ;;
-            o) output="${OPTARG}" ;;
-            l) length="${OPTARG}" ;;
-            s) start="${OPTARG}" ;;
-            e) end="${OPTARG}" ;;
-            \?) show_help; return 1 ;;
+    # Parse options. Hand-rolled rather than getopts so that both short (-o) and
+    # GNU-style long (--output, --output=x) flags work on macOS's bash 3.2,
+    # whose getopts has no long-option support.
+    local need_arg
+    while [ $# -gt 0 ]; do
+        need_arg=""
+        case "$1" in
+            -h | --help)    show_help; return 0 ;;
+            -f | --force)   force=1; shift; continue ;;
+            -v | --verbose) verbose=1; shift; continue ;;
+            -o | --output) output="${2-}"; need_arg=1 ;;
+            -l | --length) length="${2-}"; need_arg=1 ;;
+            -s | --start)  start="${2-}";  need_arg=1 ;;
+            -e | --end)    end="${2-}";    need_arg=1 ;;
+            --output=*)    output="${1#*=}"; shift; continue ;;
+            --length=*)    length="${1#*=}"; shift; continue ;;
+            --start=*)     start="${1#*=}";  shift; continue ;;
+            --end=*)       end="${1#*=}";    shift; continue ;;
+            --) shift; while [ $# -gt 0 ]; do positional+=("$1"); shift; done; break ;;
+            -*)
+                echo "Error: unknown option: $1" >&2
+                echo "" >&2
+                show_help
+                return 1
+                ;;
+            *) positional+=("$1"); shift; continue ;;
         esac
+        # Falls through here only for the space-separated long/short value flags.
+        if [ -n "${need_arg}" ] && [ $# -lt 2 ]; then
+            echo "Error: option $1 requires a value" >&2
+            return 1
+        fi
+        shift 2
     done
-    shift $((OPTIND - 1))
+
+    set -- ${positional[@]+"${positional[@]}"}
+
+    VERBOSE="${verbose}"
+
+    # Shared ffmpeg verbosity flags. Verbose keeps ffmpeg's full output; quiet
+    # silences everything but real errors. When quiet AND stderr is a terminal
+    # we still add -stats so an interactive user sees ffmpeg's own live one-line
+    # progress readout; in a pipeline/script we use -nostats for clean output.
+    local -a ff_verbosity
+    if [ -n "${verbose}" ]; then
+        ff_verbosity=(-hide_banner)
+    elif [ -t 2 ]; then
+        ff_verbosity=(-hide_banner -loglevel error -stats)
+    else
+        ff_verbosity=(-hide_banner -loglevel error -nostats)
+    fi
 
     # Only the input video is required
     if [ $# -lt 1 ]; then
@@ -117,14 +172,14 @@ main() {
         input_dir=$(dirname "${input}")
         input_base=$(basename "${input}")
         output="${input_dir}/${input_base%.*}.gif"
-        echo "No output specified, using: ${output}"
+        log "No output specified, using: ${output}"
     else
         output="${output/#\~/${HOME}}"
         case "${output}" in
             *.gif) ;;
             *)
                 output="${output}.gif"
-                echo "Adding .gif extension to output filename: ${output}"
+                log "Adding .gif extension to output filename: ${output}"
                 ;;
         esac
     fi
@@ -167,7 +222,7 @@ main() {
     TEMP_CLIP="${temp_clip}"
 
     # -- Step 1: extract the clip -------------------------------------------
-    local -a clip_cmd=(ffmpeg -hide_banner -y)
+    local -a clip_cmd=(ffmpeg "${ff_verbosity[@]}" -y)
     [ -n "${start}" ] && clip_cmd+=(-ss "${start}")
     clip_cmd+=(-i "${input}")
     if [ -n "${end}" ]; then
@@ -179,7 +234,7 @@ main() {
     fi
     clip_cmd+=(-c copy "${temp_clip}")
 
-    echo "Creating temporary clip..."
+    log "Creating temporary clip..."
     if ! "${clip_cmd[@]}"; then
         echo "Error: Failed to create temporary clip" >&2
         return 1
@@ -192,16 +247,16 @@ main() {
         clip_duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "${temp_clip}")
         speedup_factor=$(fdiv "${clip_duration}" "${length}")
 
-        echo "Clip duration: ${clip_duration} seconds"
-        echo "Target length: ${length} seconds"
-        echo "Speed factor:  ${speedup_factor}x"
+        log "Clip duration: ${clip_duration} seconds"
+        log "Target length: ${length} seconds"
+        log "Speed factor:  ${speedup_factor}x"
 
         speed_filter=",setpts=PTS/${speedup_factor}"
     fi
 
     # -- Step 3: convert to GIF with a generated palette --------------------
-    echo "Converting clip to GIF..."
-    if ! ffmpeg -hide_banner -y -i "${temp_clip}" \
+    log "Converting clip to GIF..."
+    if ! ffmpeg "${ff_verbosity[@]}" -y -i "${temp_clip}" \
         -vf "fps=10,scale=720:-1:flags=lanczos${speed_filter},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" \
         -loop 0 "${output}"; then
         echo "Error: Failed to create GIF" >&2
