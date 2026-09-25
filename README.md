@@ -164,6 +164,19 @@ hist | cut -f1            # Just the commands (tab-separated fields)
 hist -h                   # Help
 ```
 
+### `ts` — Current timestamp
+
+A wrapper for `date`, used to conveniently generate the current time in common formats without memorizing format strings. Defaults to ISO 8601 with your local UTC offset. An optional `date|hour|minute|second` argument truncates the time. See `ts help` for where each format is typically used.
+
+```bash
+ts                         # ISO 8601 (default): 2026-09-25T11:24:24-05:00
+ts --format utc            # UTC: 2026-09-25T16:24:24Z
+ts --format epoch          # Unix epoch seconds: 1790353464
+ts --format local          # Local, no timezone: 2026-09-25 11:24:24
+ts date                    # Truncate to the day: 2026-09-25T00:00:00-05:00
+ts --format utc hour       # Truncate to the hour: 2026-09-25T16:00:00Z
+```
+
 ### Navigation aliases
 
 | Alias  | Action |
