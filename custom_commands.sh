@@ -468,3 +468,98 @@ function gen() {
 }
 
 
+
+function ts() {
+    custom_command "ts - date wrapper for the current time"
+    local usage="Usage: ts [--format <format>] [date|hour|minute|second] [-h|--help|help]
+  A wrapper for \`date\`, used to conveniently generate the current time in common formats.
+  Defaults to ISO 8601 with your local UTC offset.
+
+Formats (--format):
+  iso     2026-09-25T11:24:24-05:00  (default)
+          ISO 8601 / RFC 3339. The general-purpose interchange format: JSON APIs, logs,
+          config files. Most languages, databases, and CLI tools parse it directly.
+  utc     2026-09-25T16:24:24Z
+          ISO 8601 in UTC (Z = UTC). Standard for servers, cloud logs, APIs, and anything
+          shared across timezones.
+  epoch   1790353464
+          Seconds since 1970-01-01 UTC. Used for time math in scripts, token/cookie
+          expirations, cache keys, and system internals. Not human-readable.
+  local   2026-09-25 11:24:24
+          Local time, no timezone. Easy to read; matches how Postgres displays a
+          timestamp (without time zone). Ambiguous once it leaves your machine.
+
+Precision (optional positional argument):
+  Truncates the current time and zeroes everything smaller. Truncation happens in the
+  format's timezone: local for iso/local, UTC for utc/epoch.
+  date    2026-09-25T00:00:00-05:00
+  hour    2026-09-25T11:00:00-05:00
+  minute  2026-09-25T11:24:00-05:00
+  second  2026-09-25T11:24:24-05:00  (default)
+
+Examples:
+  ts                  2026-09-25T11:24:24-05:00
+  ts date             2026-09-25T00:00:00-05:00
+  ts --format utc hour      2026-09-25T16:00:00Z
+  ts --format epoch minute  1790353440"
+
+    local format="iso"
+    local precision="second"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --format)
+                if [[ -z "$2" ]]; then
+                    echo "Error: No format provided after --format flag" >&2
+                    echo "${usage}" >&2
+                    return 1
+                fi
+                format="$2"
+                shift 2
+                ;;
+            -h|--help|help)
+                echo "${usage}"
+                return 0
+                ;;
+            date|hour|minute|second)
+                precision="$1"
+                shift
+                ;;
+            *)
+                echo "Error: Unknown argument '$1'" >&2
+                echo "${usage}" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    local keep_chars epoch_unit
+    case "${precision}" in
+        date)   keep_chars=11; epoch_unit=86400 ;;
+        hour)   keep_chars=13; epoch_unit=3600 ;;
+        minute) keep_chars=16; epoch_unit=60 ;;
+        second) keep_chars=19; epoch_unit=1 ;;
+    esac
+
+    local stamp
+    case "${format}" in
+        iso)   stamp=$(date -Iseconds) ;;
+        utc)   stamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") ;;
+        local) stamp=$(date +"%Y-%m-%d %H:%M:%S") ;;
+        epoch)
+            local now
+            now=$(date +%s)
+            echo $(( now - now % epoch_unit ))
+            return 0
+            ;;
+        *)
+            echo "Error: Unknown format '${format}' (expected iso, utc, epoch, or local)" >&2
+            return 1
+            ;;
+    esac
+
+    # All non-epoch stamps share the layout YYYY-MM-DD?HH:MM:SS<suffix>, so zero the
+    # time fields past the kept prefix and reattach any suffix (offset or Z)
+    local zeros="00:00:00"
+    echo "${stamp:0:${keep_chars}}${zeros:$(( keep_chars - 11 ))}${stamp:19}"
+}
