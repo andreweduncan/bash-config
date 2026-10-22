@@ -434,6 +434,85 @@ function gif() {
 }
 
 
+# Function to record daily commit with date and message
+function dc() {
+    custom_command "daily commit"
+    local open_file=false
+    local daily_commit_file="${HOME}/Desktop/daily-commit.txt"
+    local message=""
+
+    # Parse flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o|--open)
+                open_file=true
+                shift
+                ;;
+            -h|--help)
+                echo "dc - Daily Commit - record a timestamped note in daily-commit.txt"
+                echo "Usage: dc [options] [message]"
+                echo ""
+                echo "With no message, dc prompts you to type one. Entering the"
+                echo "message at the prompt avoids shell quoting, globbing, and"
+                echo "escaping, so you can type any characters freely."
+                echo ""
+                echo "Options:"
+                echo "  -h, --help    Display this help message"
+                echo "  -o, --open    Open the daily commit file after adding the message"
+                echo ""
+                echo "Examples:"
+                echo "  dc                               Prompt for an entry, then record it"
+                echo "  dc Working on new feature        Record the given message"
+                echo "  dc -o Fixed bug in login         Record the message and open the file"
+                return 0
+                ;;
+            *)
+                # Collect all remaining arguments as the message
+                message="$*"
+                break
+                ;;
+        esac
+    done
+
+    # No message on the command line.
+    if [ -z "${message}" ]; then
+        # `dc -o` with no message stays a shortcut to just open the file.
+        if [ "${open_file}" = true ]; then
+            open "${daily_commit_file}"
+            return 0
+        fi
+        # Otherwise prompt for the entry. Reading it interactively means the
+        # shell never parses it, so quotes, globs, and backslashes are taken
+        # literally and need no escaping. -r keeps backslashes verbatim and
+        # IFS= preserves leading/trailing whitespace.
+        if [ -t 0 ]; then
+            IFS= read -r -e -p "Daily commit entry: " message
+        else
+            IFS= read -r message
+        fi
+    fi
+
+    # Still nothing to record (empty prompt or empty piped input).
+    if [ -z "${message}" ]; then
+        echo "No entry provided; nothing recorded."
+        return 1
+    fi
+
+    # Get current date in YYYY-MM-DD format
+    current_date=$(date +"%Y-%m-%d")
+
+    # Append date and message to daily-commit.txt
+    echo "${current_date}: ${message}" >> "${daily_commit_file}"
+
+    echo "Commit recorded: ${current_date}: ${message}"
+
+    # Open the file if flag is set
+    if [ "${open_file}" = true ]; then
+        open "${daily_commit_file}"
+    fi
+}
+
+
 function gen() {
     custom_command "gen - pseudorandom word series generator"
     local words_file="${dotfiles_dir}/alias_support/wordlists/wordlist.txt"
