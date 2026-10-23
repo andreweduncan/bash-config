@@ -457,10 +457,11 @@ function _src_candidates() {
 }
 
 
+# Options come from the command line; rr calls src without any
+# shellcheck disable=SC2120
 function src() {
-    custom_command "src"
     # Source shell config files to pick up any changes
-    local usage="Usage: src [-n]
+    local usage="Usage: src [-n] [-q]
   Reloads the shell config to pick up changes.
 
   Run inside the config's own repo, it loads the newest work there instead: the
@@ -471,26 +472,42 @@ function src() {
 
 Options:
   -n, --no-switch   Reload the usual config, without looking for newer work
+  -q, --quiet       Print nothing, except errors
   -h, --help        Show this help"
 
     local look=true
-    case "${1-}" in
-        "") ;;
-        -n|--no-switch) look=false ;;
-        -h|--help)
-            echo "${usage}"
-            return 0
-            ;;
-        *)
-            echo "Error: Unknown option '$1'" >&2
-            echo "${usage}" >&2
-            return 2
-            ;;
-    esac
-    if [[ $# -gt 1 ]]; then
-        echo "Error: src takes at most one option, got $#." >&2
-        return 2
+    local quiet=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -n|--no-switch) look=false ;;
+            -q|--quiet) quiet=true ;;
+            -h|--help)
+                echo "${usage}"
+                return 0
+                ;;
+            *)
+                echo "Error: Unknown option '$1'" >&2
+                echo "${usage}" >&2
+                return 2
+                ;;
+        esac
+        shift
+    done
+
+    # Quiet hides everything src and the config files print; errors still show
+    if [[ "${quiet}" = true ]]; then
+        _src_load "${look}" >/dev/null
+    else
+        custom_command "src"
+        _src_load "${look}"
     fi
+}
+
+
+function _src_load() {
+    # For src: reload the config, loading the newest work instead when <look> is
+    # true and this is the config's own repo
+    local look="$1"
 
     # Only look for newer work inside the repo this config was loaded from
     local base=""
@@ -541,6 +558,7 @@ Options:
         fi
         echo "Loading the config from ${checkout} (${label}): it has the newest changes not on ${base}"
     fi
+    # shellcheck source=/dev/null
     source "${checkout}/.bash_profile"
 }
 

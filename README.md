@@ -104,6 +104,7 @@ Run inside this repo, it loads the newest work instead, so you can try a change 
 ```bash
 src                       # Reload, from the newest work when inside this repo
 src -n                    # Reload the usual config, wherever you are
+src -q                    # Print nothing, except errors (works with -n too)
 ```
 
 `rr` uses `src` too, then returns to the directory you ran it from before rerunning.
