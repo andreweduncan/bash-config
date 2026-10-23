@@ -1,0 +1,402 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["opencv-python-headless>=4.9", "numpy"]
+# ///
+"""Line up two pictures of the same thing, and crop both to the area they share.
+
+For two screenshots taken a little differently (scrolled, cropped, a different
+window size) or a "spot the difference" pair: finds where image2 sits relative
+to image1, then writes two same-size images covering only the shared area, so
+they can be compared pixel by pixel (imgdiff does this with --align).
+
+It matches distinctive points (corners, text, edges) between the images and
+fits a shift, plus any scale or rotation, that maps one onto the other. Pure
+shifts are snapped to whole pixels, so screenshots aren't resampled and stay
+pixel-exact. If too few points match, it falls back to phase correlation,
+which finds a plain shift.
+
+With --split, it takes one image holding both pictures (side by side or one
+above the other, as in most spot-the-difference puzzles). It finds the two
+copies by matching the image's points against themselves, splits between them
+(at the plain divider, if there is one), and lines up the two halves. It
+only splits when the two copies are clear, since one image is more often a
+mistake (a missing second image) than a puzzle.
+
+--split-harder searches harder: it accepts weaker matches between the copies,
+and if it still can't find them, it tries splitting down the middle and across
+it, and keeps whichever lines up better.
+
+Usage: imgalign <image1> <image2> <out1> <out2>
+       imgalign --split <image> <out1> <out2>
+       imgalign --split-harder <image> <out1> <out2>
+Exits 0 when aligned, 2 when the images can't be lined up, and 3 when --split
+can't find two copies in the image.
+"""
+
+import sys
+from collections import Counter
+
+import cv2
+import numpy as np
+
+MIN_MATCHES = 8
+# Phase correlation's confidence (0 to 1). Matching pairs scored 0.65 to 0.95 in
+# testing, and unrelated images under 0.05.
+MIN_PHASE_RESPONSE = 0.2
+# How clearly an image must show two copies before it's split, as (share of
+# matches agreeing on one offset, how far the agreeing points spread along the
+# split as a share of the offset, and across it as a share of the image). In
+# testing, puzzles scored at least (0.90, 0.83, 0.66), and text screenshots, whose
+# repeated letters match each other, at most (0.04, 0.34, 0.02).
+COPIES_CLEAR = (0.5, 0.4, 0.3)
+COPIES_POSSIBLE = (0.2, 0.2, 0.15)  # when searching harder
+# How much a divider line's colour may vary (in 0-255 levels), to allow for
+# compression noise. A line of photo or text varies far more.
+DIVIDER_MAX_STD = 6
+
+
+def gray(image):
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+def match_features(a, b):
+    """(2x3 transform mapping b onto a, number of agreeing matches), or None."""
+    detector = cv2.SIFT_create()
+    keys_a, desc_a = detector.detectAndCompute(gray(a), None)
+    keys_b, desc_b = detector.detectAndCompute(gray(b), None)
+    if desc_a is None or desc_b is None or len(keys_a) < MIN_MATCHES or len(keys_b) < MIN_MATCHES:
+        return None
+    pairs = cv2.BFMatcher(cv2.NORM_L2).knnMatch(desc_b, desc_a, k=2)
+    # Lowe's ratio test: keep a match only if it's clearly better than the runner-up
+    good = [p[0] for p in pairs if len(p) == 2 and p[0].distance < 0.75 * p[1].distance]
+    if len(good) < MIN_MATCHES:
+        return None
+    src = np.float32([keys_b[m.queryIdx].pt for m in good])
+    dst = np.float32([keys_a[m.trainIdx].pt for m in good])
+    transform, inliers = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=3.0)
+    if transform is None or int(inliers.sum()) < MIN_MATCHES:
+        return None
+    return transform, int(inliers.sum())
+
+
+def phase_shift(a, b):
+    """(2x3 transform shifting b onto a, confidence), by phase correlation
+    (shift only), or None if the result is too weak to trust."""
+    h, w = max(a.shape[0], b.shape[0]), max(a.shape[1], b.shape[1])
+
+    def padded(image):
+        canvas = np.zeros((h, w), np.float32)
+        canvas[: image.shape[0], : image.shape[1]] = gray(image)
+        return canvas
+
+    (dx, dy), response = cv2.phaseCorrelate(padded(b), padded(a))
+    if response < MIN_PHASE_RESPONSE:
+        return None
+    return np.float32([[1, 0, dx], [0, 1, dy]]), float(response)
+
+
+def find_transform(a, b):
+    """(transform, method, score) mapping b onto a, or None. Higher scores are
+    better: any feature match beats phase correlation."""
+    found = match_features(a, b)
+    if found:
+        return found[0], "matched features", 1 + found[1]
+    found = phase_shift(a, b)
+    if found:
+        return found[0], "phase correlation (few features matched)", found[1]
+    return None
+
+
+def describe(transform):
+    scale = float(np.hypot(transform[0, 0], transform[1, 0]))
+    angle = float(np.degrees(np.arctan2(transform[1, 0], transform[0, 0])))
+    return scale, angle, float(transform[0, 2]), float(transform[1, 2])
+
+
+def largest_inside(mask):
+    """A rough largest rectangle (x, y, w, h) lying wholly inside the mask."""
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    top, bottom, left, right = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    # Shave off whichever edge has the most uncovered pixels until none are left
+    while top < bottom and left < right:
+        box = mask[top:bottom, left:right]
+        if box.all():
+            return left, top, right - left, bottom - top
+        gaps = {
+            "top": (box[0] == 0).sum(),
+            "bottom": (box[-1] == 0).sum(),
+            "left": (box[:, 0] == 0).sum(),
+            "right": (box[:, -1] == 0).sum(),
+        }
+        edge = max(gaps, key=gaps.get)
+        if edge == "top":
+            top += 1
+        elif edge == "bottom":
+            bottom -= 1
+        elif edge == "left":
+            left += 1
+        else:
+            right -= 1
+    return None
+
+
+def plain_runs(image, axis):
+    """Runs [start, end) of plain lines: full-length columns (axis=1) or rows
+    (axis=0) of a single colour."""
+    spread = image.std(axis=0 if axis == 1 else 1).max(axis=-1)
+    plain = spread < DIVIDER_MAX_STD
+    runs, start = [], None
+    for i, flat in enumerate(plain):
+        if flat and start is None:
+            start = i
+        elif not flat and start is not None:
+            runs.append((start, i))
+            start = None
+    if start is not None:
+        runs.append((start, len(plain)))
+    return runs
+
+
+def halves(image, axis, start, end):
+    """The parts of the image before and after [start, end) along the axis."""
+    if axis == 1:
+        return image[:, :start], image[:, end:]
+    return image[:start], image[end:]
+
+
+def copy_offset(image, harder=False):
+    """Find the two copies of a picture inside one image, by matching the image's
+    feature points against themselves: the most common offset between matching
+    points is the distance from one copy to the other. Returns
+    (axis, end of the first copy, start of the second), or None. Axis 1 means
+    side by side, 0 means one above the other."""
+    # Searching harder accepts less distinctive matches, and fewer of them
+    ratio, needed = (0.85, MIN_MATCHES // 2) if harder else (0.75, MIN_MATCHES)
+    keys, desc = cv2.SIFT_create().detectAndCompute(gray(image), None)
+    if desc is None or len(keys) < 2 * needed:
+        return None
+    h, w = image.shape[:2]
+    pairs = []
+    for found in cv2.BFMatcher(cv2.NORM_L2).knnMatch(desc, desc, k=3):
+        others = [m for m in found if m.trainIdx != m.queryIdx]  # skip each point matching itself
+        if len(others) < 2 or others[0].distance >= ratio * others[1].distance:
+            continue
+        p = np.float32(keys[others[0].queryIdx].pt)
+        q = np.float32(keys[others[0].trainIdx].pt)
+        d = q - p
+        # Point each pair from the first copy to the second (rightwards or downwards)
+        if d[np.argmax(np.abs(d))] < 0:
+            p, q, d = q, p, -d
+        if np.hypot(*d) > 0.2 * min(h, w):
+            pairs.append((p, q, d))
+    if len(pairs) < needed:
+        return None
+
+    # The most common offset, to within a few pixels
+    bins = Counter(tuple(np.round(d / 4).astype(int)) for _, _, d in pairs)
+    mode = np.float32(bins.most_common(1)[0][0]) * 4
+    agree = [(p, q) for p, q, d in pairs if np.hypot(*(d - mode)) <= 8]
+    if len(agree) < needed:
+        return None
+    axis = 1 if abs(mode[0]) >= abs(mode[1]) else 0
+    coord = 0 if axis == 1 else 1
+
+    # Two real copies agree on one offset almost everywhere, across most of the
+    # picture. Repeated letters or icons agree on many small, scattered offsets.
+    points = np.float32([p for p, _ in agree])
+    share = len(agree) / len(pairs)
+    along = np.ptp(points[:, coord]) / abs(mode[coord])
+    across = np.ptp(points[:, 1 - coord]) / (h if axis == 1 else w)
+    if any(value < bar for value, bar in zip((share, along, across), COPIES_POSSIBLE if harder else COPIES_CLEAR)):
+        return None
+
+    first_end = max(p[coord] for p, _ in agree)
+    second_start = min(q[coord] for _, q in agree)
+    return axis, int(first_end), int(np.ceil(second_start))
+
+
+def split_at_copies(image, harder=False):
+    """Ways to split the image between its two copies: [(description, first,
+    second, axis, seam)], where seam is the split position when no divider is
+    dropped (so the split can be nudged), else None. Empty if no copies found."""
+    found = copy_offset(image, harder)
+    if not found:
+        return []
+    axis, gap_start, gap_end = found
+    layout = "side by side" if axis == 1 else "one above the other"
+    lines = "columns" if axis == 1 else "rows"
+    if gap_start > gap_end:
+        gap_start, gap_end = gap_end, gap_start
+    middle = (gap_start + gap_end) // 2
+    options = [(f"Found two copies {layout}; split at {lines[:-1]} {{seam}}", *halves(image, axis, middle, middle), axis, middle)]
+
+    # A plain band between the copies may be a divider: try splitting there,
+    # dropping it (and any outer border of the same colour), so neither half
+    # keeps a strip of it. A plain patch of sky can look like one too, which is
+    # why every option is tried and the best overlap wins.
+    for start, end in plain_runs(image, axis):
+        if start < gap_end and end > gap_start:
+            first, second = halves(image, axis, start, end)
+            colour = (image[:, start:end] if axis == 1 else image[start:end]).reshape(-1, 3).mean(axis=0)
+            first = trim_outer(first, axis, colour, at_start=True)
+            second = trim_outer(second, axis, colour, at_start=False)
+            options.append((f"Found two copies {layout}, divided at the plain {lines} {start}-{end - 1}", first, second, axis, None))
+    return options
+
+
+def trim_outer(image, axis, colour, at_start):
+    """Drop a plain border of the divider's colour from the outer edge of a half
+    (the left or top edge of the first half, the right or bottom of the second)."""
+    length = image.shape[1] if axis == 1 else image.shape[0]
+    for start, end in plain_runs(image, axis):
+        touches = start == 0 if at_start else end == length
+        if not touches:
+            continue
+        band = image[:, start:end] if axis == 1 else image[start:end]
+        if np.abs(band.reshape(-1, 3).mean(axis=0) - colour).max() > 2 * DIVIDER_MAX_STD:
+            continue
+        keep = (end, length) if at_start else (0, start)
+        if keep[1] - keep[0] >= 8:
+            return image[:, keep[0]:keep[1]] if axis == 1 else image[keep[0]:keep[1]]
+    return image
+
+
+def split_options(image, harder=False):
+    """Ways to split the image into two pictures: [(description, first, second,
+    axis, seam)]. Between the two copies when they can be found; otherwise, when
+    searching harder, down and across the middle (and empty when not)."""
+    options = split_at_copies(image, harder)
+    if options or not harder:
+        return options
+    h, w = image.shape[:2]
+    note = "Split {layout}, at {lines} {{seam}} (couldn't find the two copies)"
+    return [
+        (note.format(layout="side by side", lines="column"), *halves(image, 1, w // 2, w // 2), 1, w // 2),
+        (note.format(layout="one above the other", lines="row"), *halves(image, 0, h // 2, h // 2), 0, h // 2),
+    ]
+
+
+def best_split(image, harder=False):
+    """Try each way of splitting the image, nudge plain splits onto the seam, and
+    return the best (description, first, second, transform, method), judged by
+    how much of the two halves overlaps once lined up. None if nothing lines up."""
+    best = None
+
+    def consider(note, first, second):
+        nonlocal best
+        found = find_transform(first, second)
+        if not found:
+            return None
+        # The two pictures in a puzzle are the same size; a big scale change
+        # means the halves were matched on the wrong things
+        if abs(describe(found[0])[0] - 1) > 0.1:
+            return None
+        cropped = align_and_crop(first, second, found[0])
+        if not cropped:
+            return None
+        area = cropped[0].shape[0] * cropped[0].shape[1]
+        if best is None or (area, found[2]) > best[0]:
+            best = ((area, found[2]), note, first, second, found[0], found[1])
+        return found[0]
+
+    length = {1: image.shape[1], 0: image.shape[0]}
+    for note, first, second, axis, seam in split_options(image, harder):
+        transform = consider(note.format(seam=seam), first, second)
+        if seam is None or transform is None:
+            continue
+        # A split off the true seam leaves part of one copy in the wrong half,
+        # which shows up as a leftover shift along the split. Move the split by
+        # that much and try again.
+        scale, _, dx, dy = describe(transform)
+        nudge = round(dx if axis == 1 else dy)
+        moved = seam - nudge
+        if abs(scale - 1) < 0.003 and nudge and 0 < moved < length[axis]:
+            consider(note.format(seam=moved), *halves(image, axis, moved, moved))
+    return best[1:] if best else None
+
+
+def align_and_crop(a, b, transform):
+    """Move b onto a and crop both to the area they share:
+    (crop of a, crop of b, description), or None if they share no area."""
+    scale, angle, dx, dy = describe(transform)
+    h, w = a.shape[:2]
+    if abs(scale - 1) < 0.003 and abs(angle) < 0.15:
+        # A plain shift: move by whole pixels, so nothing gets resampled
+        dx, dy = round(dx), round(dy)
+        transform = np.float32([[1, 0, dx], [0, 1, dy]])
+        scale, angle = 1.0, 0.0
+        flags = cv2.INTER_NEAREST
+    else:
+        flags = cv2.INTER_LINEAR
+
+    warped = cv2.warpAffine(b, transform, (w, h), flags=flags)
+    covered = cv2.warpAffine(np.full(b.shape[:2], 255, np.uint8), transform, (w, h), flags=cv2.INTER_NEAREST)
+    if flags == cv2.INTER_LINEAR:
+        covered = cv2.erode(covered, np.ones((3, 3), np.uint8))  # drop blended edges
+    rect = largest_inside(covered > 0)
+    if rect is None or rect[2] < 8 or rect[3] < 8:
+        return None
+    x, y, rw, rh = rect
+
+    moved = f"shifted {dx:+g}, {dy:+g} px" if isinstance(dx, int) else f"shifted {dx:+.1f}, {dy:+.1f} px"
+    extra = "" if scale == 1.0 else f", scaled {scale:.3f}x, rotated {angle:+.2f}°"
+    return a[y : y + rh, x : x + rw], warped[y : y + rh, x : x + rw], f"{moved}{extra}; shared area {rw}x{rh}"
+
+
+def read(path):
+    image = cv2.imread(path)
+    if image is None:
+        print(f"Error: couldn't read {path} as an image", file=sys.stderr)
+    return image
+
+
+def main(argv):
+    split = len(argv) > 1 and argv[1] in ("--split", "--split-harder")
+    harder = split and argv[1] == "--split-harder"
+    if split:
+        argv = argv[1:]
+    if len(argv) != (4 if split else 5) or argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if len(argv) == 2 and argv[1] in ("-h", "--help") else 2
+
+    if split:
+        _, path, out1, out2 = argv
+        image = read(path)
+        if image is None:
+            return 2
+        found = best_split(image, harder)
+        if found is None:
+            print("Error: couldn't find two copies of the same picture in the image.", file=sys.stderr)
+            return 2 if harder else 3
+        note, a, b, transform, method = found
+    else:
+        _, path1, path2, out1, out2 = argv
+        a, b = read(path1), read(path2)
+        if a is None or b is None:
+            return 2
+        found = find_transform(a, b)
+        if found is None:
+            print("Error: couldn't line the images up. They don't seem to show the same thing.", file=sys.stderr)
+            return 2
+        transform, method, _ = found
+        note = None
+
+    cropped = align_and_crop(a, b, transform)
+    if cropped is None:
+        print("Error: couldn't find an area the two images share", file=sys.stderr)
+        return 2
+    crop_a, crop_b, details = cropped
+    cv2.imwrite(out1, crop_a)
+    cv2.imwrite(out2, crop_b)
+    if note:
+        print(note)
+    second = "the second half" if split else "image2"
+    print(f"Aligned by {method}: {second} {details}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

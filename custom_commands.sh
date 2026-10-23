@@ -434,6 +434,241 @@ function gif() {
 }
 
 
+function imgdiff() {
+    custom_command "imgdiff - highlight the pixels that differ between two images"
+    local usage="Usage: imgdiff [options] <image1> <image2>
+       imgdiff [options] <image>   (one image holding both pictures)
+  Compares two images with ImageMagick's \`compare\`, prints how many pixels differ, and
+  opens a copy of image1 with every differing pixel painted red.
+  Exits 0 if the images match, 1 if they differ, 2 on an error (like \`diff\`).
+
+  Images of different sizes are lined up first (as with --align): image2 is moved
+  (and scaled, if needed) to sit on image1, and only the area they share is compared.
+
+  Given one image, like a spot-the-difference puzzle, it finds the two copies of the
+  picture inside it, splits them apart and compares them. If the copies aren't clear,
+  it stops and asks whether you meant to add a second image, or to use --split.
+
+Options:
+  -a, --align           Line the images up before comparing, even if they're the same
+                        size: for screenshots scrolled or cropped differently, or a
+                        spot-the-difference pair. Uses OpenCV via uv (programs/imgdiff)
+  -s, --split           With one image: search harder for the two pictures in it,
+                        and split down or across the middle if they still aren't clear
+  -f, --fuzz [amount]   Count colours this close as the same, as a percentage, e.g. 5%
+                        (default: exact; -f alone: 10%)
+  -o, --output <file>   Where to save the highlighted image
+                        (default: \$TMPDIR/imgdiff/<image1>-vs-<image2>.png)
+  -n, --no-open         Save the highlighted image without opening it
+  -h, --help            Show this help
+
+Examples:
+  imgdiff before.png after.png          highlight every changed pixel
+  imgdiff -f 5% before.png after.png    ignore tiny colour shifts (anti-aliasing)
+  imgdiff -f cam1.png cam2.png          ignore camera noise (the default 10%)
+  imgdiff -a shot1.png shot2.png        line up two screenshots, then compare
+  imgdiff -a -f 10% left.jpg right.jpg  spot the difference in two photos
+  imgdiff -f 10% puzzle.png             spot the difference in a one-image puzzle
+  imgdiff -s -f 10% puzzle.png          the same, searching harder for the two pictures
+  imgdiff -n -o diff.png a.png b.png    save to diff.png, don't open it
+
+Requires ImageMagick: brew install imagemagick
+Lining up and splitting also need uv (brew install uv); the first run downloads OpenCV once."
+
+    local fuzz="0"
+    local default_fuzz="10%"
+    # A fuzz amount is a percentage, like 10% or 2.5%. The % is required: it's how
+    # a bare -f is told apart from -f followed by an image, and ImageMagick reads a
+    # plain number as a raw colour value out of 65535, so -fuzz 10 is nearly exact.
+    # (The pattern lives in a variable so bash 3.2 and later parse =~ the same way.)
+    local fuzz_pattern='^[0-9]+([.][0-9]+)?%$'
+    local plain_number_pattern='^[0-9]+([.][0-9]+)?$'
+    local output=""
+    local open_output=true
+    local align=false
+    local split_harder=false
+    local images=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--fuzz)
+                # The amount is optional: take the next word only if it's a
+                # percentage, so "-f 01.png 02.png" keeps both images
+                if [[ "${2-}" =~ ${fuzz_pattern} ]]; then
+                    fuzz="$2"
+                    shift 2
+                elif [[ "${2-}" =~ ${plain_number_pattern} ]]; then
+                    echo "Error: $1 takes a percentage: did you mean $1 $2%?" >&2
+                    return 2
+                else
+                    fuzz="${default_fuzz}"
+                    shift
+                fi
+                ;;
+            --fuzz=*)
+                fuzz="${1#*=}"
+                if [[ ! "${fuzz}" =~ ${fuzz_pattern} ]]; then
+                    echo "Error: --fuzz needs a percentage like 10%, got '${fuzz}'" >&2
+                    return 2
+                fi
+                shift
+                ;;
+            -o|--output)
+                if [[ -z "$2" ]]; then
+                    echo "Error: No value provided after $1" >&2
+                    echo "${usage}" >&2
+                    return 2
+                fi
+                output="$2"
+                shift 2
+                ;;
+            -n|--no-open)
+                open_output=false
+                shift
+                ;;
+            -a|--align)
+                align=true
+                shift
+                ;;
+            -s|--split)
+                split_harder=true
+                shift
+                ;;
+            -h|--help|help)
+                echo "${usage}"
+                return 0
+                ;;
+            -*)
+                echo "Error: Unknown option '$1'" >&2
+                echo "${usage}" >&2
+                return 2
+                ;;
+            *)
+                images+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    if [[ ${#images[@]} -lt 1 ]] || [[ ${#images[@]} -gt 2 ]]; then
+        echo "Error: Expected two images (or one holding both pictures), got ${#images[@]}." >&2
+        echo "${usage}" >&2
+        return 2
+    fi
+    if [[ "${split_harder}" = true ]] && [[ ${#images[@]} -ne 1 ]]; then
+        echo "Error: --split is for one image holding both pictures; got ${#images[@]} images." >&2
+        return 2
+    fi
+
+    if ! command -v magick >/dev/null 2>&1; then
+        echo "Error: ImageMagick isn't installed. Install it with: brew install imagemagick" >&2
+        return 2
+    fi
+    local image
+    for image in "${images[@]}"; do
+        if [[ ! -f "${image}" ]]; then
+            echo "Error: File not found: ${image}" >&2
+            return 2
+        fi
+    done
+
+    # One image: split it into its two pictures, then compare those
+    if [[ ${#images[@]} -eq 1 ]]; then
+        local source="${images[0]}"
+        if ! command -v uv >/dev/null 2>&1; then
+            echo "Error: Splitting an image needs uv. Install it with: brew install uv" >&2
+            return 2
+        fi
+        local base
+        base=$(basename "${source%.*}")
+        mkdir -p "${TMPDIR:-/tmp/}imgdiff"
+        images=("${TMPDIR:-/tmp/}imgdiff/${base}-first.png" "${TMPDIR:-/tmp/}imgdiff/${base}-second.png")
+        if [[ -z "${output}" ]]; then
+            output="${TMPDIR:-/tmp/}imgdiff/${base}-diff.png"
+        fi
+        local mode="--split"
+        [[ "${split_harder}" = true ]] && mode="--split-harder"
+        "${dotfiles_dir}/programs/imgdiff/imgalign" "${mode}" "${source}" "${images[0]}" "${images[1]}"
+        local split_status=$?
+        if [[ ${split_status} -eq 3 ]]; then
+            # Most often one image means the second was left off by mistake
+            echo "" >&2
+            echo "Did you mean to compare it with another image? Add the second one:" >&2
+            echo "  imgdiff ${source} <image2>" >&2
+            echo "Or, if it really holds two pictures, search harder:" >&2
+            echo "  imgdiff --split ${source}" >&2
+            return 2
+        elif [[ ${split_status} -ne 0 ]]; then
+            return 2
+        fi
+    fi
+    local image1="${images[0]}"
+    local image2="${images[1]}"
+
+    local size1 size2
+    size1=$(magick identify -format "%wx%h" "${image1}[0]") || return 2
+    size2=$(magick identify -format "%wx%h" "${image2}[0]") || return 2
+
+    local name1 name2 workdir
+    name1=$(basename "${image1%.*}")
+    name2=$(basename "${image2%.*}")
+    workdir="${TMPDIR:-/tmp/}imgdiff"
+    mkdir -p "${workdir}"
+    if [[ -z "${output}" ]]; then
+        output="${workdir}/${name1}-vs-${name2}.png"
+    fi
+
+    # compare works pixel by pixel, so images of different sizes are lined up first:
+    # imgalign crops both to the area they share and writes them as two
+    # same-size images, which are compared instead of the originals
+    local compare1="${image1}"
+    local compare2="${image2}"
+    if [[ "${align}" = true ]] || [[ "${size1}" != "${size2}" ]]; then
+        if ! command -v uv >/dev/null 2>&1; then
+            echo "Error: Lining up images needs uv. Install it with: brew install uv" >&2
+            [[ "${size1}" != "${size2}" ]] && echo "(The images are different sizes: ${size1} vs ${size2}.)" >&2
+            return 2
+        fi
+        if [[ "${align}" != true ]]; then
+            echo "The images are different sizes (${size1} vs ${size2}), so lining them up first"
+        fi
+        compare1="${workdir}/${name1}-aligned.png"
+        compare2="${workdir}/${name2}-aligned.png"
+        "${dotfiles_dir}/programs/imgdiff/imgalign" "${image1}" "${image2}" "${compare1}" "${compare2}" || return 2
+        size1=$(magick identify -format "%wx%h" "${compare1}") || return 2
+    fi
+
+    # -metric AE counts the differing pixels and prints the count to stderr.
+    # compare exits 0 when the images match, 1 when they differ, 2 on an error.
+    local result status
+    result=$(magick compare -metric AE -fuzz "${fuzz}" "${compare1}" "${compare2}" "${output}" 2>&1)
+    status=$?
+    if [[ ${status} -gt 1 ]]; then
+        echo "Error: ImageMagick couldn't compare the images: ${result}" >&2
+        return 2
+    fi
+
+    # The count comes first, followed by a normalised value in brackets. It can be
+    # fractional (partly different pixels), so round it for display.
+    local count
+    count=$(printf "%.0f" "${result%% *}")
+    local total=$(( ${size1%x*} * ${size1#*x} ))
+    local percent
+    percent=$(awk -v c="${count}" -v t="${total}" 'BEGIN { printf "%.3f", 100 * c / t }')
+
+    if [[ ${status} -eq 0 ]]; then
+        echo "Identical: no pixels differ (${size1})"
+        return 0
+    fi
+    echo "Different: ${count} of ${total} pixels differ (${percent}%)"
+    echo "Highlighted in red: ${output}"
+    if [[ "${open_output}" = true ]]; then
+        open "${output}"
+    fi
+    return 1
+}
+
+
 # Function to record daily commit with date and message
 function dc() {
     custom_command "daily commit"

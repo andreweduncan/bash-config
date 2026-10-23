@@ -36,6 +36,9 @@ bash-config/
 ├── .bashrc               # Sources ~/.bash_profile
 ├── prompt.sh             # Git-aware PS1/PS2 prompt
 ├── custom_commands.sh    # Functions and aliases
+├── programs/
+│   ├── gif/              # Standalone ffmpeg wrapper behind `gif`
+│   └── imgdiff/          # imgalign, which lines images up for `imgdiff`
 ├── setup/
 │   └── setup.sh          # One-shot installer
 ├── alias_support/
@@ -137,6 +140,18 @@ gif -v video.mp4                           # Verbose: show ffmpeg's full output
 ```
 
 Quiet by default — on success it prints only the output path (interactive terminals still show ffmpeg's live progress line). Pass `-v`/`--verbose` for full ffmpeg output.
+
+### `imgdiff` — Highlight what changed between two images
+
+Compares two images, prints how many pixels differ, and opens a copy of the first with every differing pixel painted red. Images of different sizes are lined up first, and one image holding both pictures (a spot-the-difference puzzle) is split and compared. Exits 0 if they match, 1 if they differ. Requires ImageMagick and uv (`brew install imagemagick uv`). See `imgdiff -h` for all options, and [programs/imgdiff](programs/imgdiff/README.md) for how lining up works.
+
+```bash
+imgdiff before.png after.png              # Highlight every changed pixel
+imgdiff -f before.png after.png           # Ignore small colour shifts, like camera noise (10%)
+imgdiff -f 5% before.png after.png        # Choose how much to ignore
+imgdiff -a shot1.png shot2.png            # Line up two screenshots, then compare
+imgdiff -f 10% puzzle.png                 # Spot the difference in a one-image puzzle
+```
 
 ### `gen` — Pseudorandom word generator
 
