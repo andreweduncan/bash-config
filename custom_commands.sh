@@ -387,18 +387,161 @@ Examples:
         last_cmd=$(echo "${last_cmd}" | sed 's/^[[:space:]]*//')
     fi
 
+    # Source the config, then come back: src may move into a worktree
+    local rerun_dir="${PWD}"
+    # rr's search string isn't meant for src
+    # shellcheck disable=SC2119
     src
+    builtin cd "${rerun_dir}" || return
 
     echo -e "re-running...\n\$\033[32m${last_cmd}\033[0m"
     eval "${last_cmd}"
 }
 
 
+function _src_candidates() {
+    # For src: print a line for each checkout or branch holding work that <base>
+    # doesn't have (commits ahead of it, or uncommitted changes), tab-separated:
+    #   <time> <worktree|branch> <path or branch> <label>
+    # <time> is the newest commit's, or the newest changed file's if that's later.
+    local base="$1"
+    local line path="" head="" label="" checked_out="" ahead time newest
+
+    # Worktrees, including the main checkout. Each is a block of lines ending in a
+    # blank line; the extra echo makes sure the last block ends too.
+    while IFS= read -r line; do
+        case "${line}" in
+            "worktree "*) path="${line#worktree }" ;;
+            "HEAD "*) head="${line#HEAD }"; label="detached at ${head:0:7}" ;;
+            "branch "*)
+                label="${line#branch refs/heads/}"
+                checked_out="${checked_out}${label}"$'\n'
+                ;;
+            "")
+                if [[ -n "${head}" && -d "${path}" ]]; then
+                    time=0
+                    ahead=$(git rev-list --count "${base}..${head}")
+                    if [[ "${ahead}" -gt 0 ]]; then
+                        time=$(git log -1 --format=%ct "${head}")
+                    fi
+                    # Changed and new files (deleted ones have no time to read)
+                    newest=$(builtin cd "${path}" && \
+                        { git diff --name-only HEAD; git ls-files --others --exclude-standard; } | \
+                        while IFS= read -r file; do
+                            [[ -e "${file}" ]] && stat -f %m "${file}"
+                        done | sort -n | tail -n 1)
+                    if [[ -n "${newest}" && "${newest}" -gt "${time}" ]]; then
+                        time="${newest}"
+                    fi
+                    if [[ "${time}" -gt 0 ]]; then
+                        printf '%s\t%s\t%s\t%s\n' "${time}" worktree "${path}" "${label}"
+                    fi
+                fi
+                path=""
+                head=""
+                label=""
+                ;;
+        esac
+    done < <(git worktree list --porcelain; echo)
+
+    # Branches not checked out anywhere (those were counted above, with their changes)
+    local branch
+    while IFS=$'\t' read -r branch time; do
+        [[ "${branch}" = "${base}" ]] && continue
+        printf '%s' "${checked_out}" | grep -qxF -e "${branch}" && continue
+        ahead=$(git rev-list --count "${base}..${branch}")
+        if [[ "${ahead}" -gt 0 ]]; then
+            printf '%s\t%s\t%s\t%s\n' "${time}" branch "${branch}" "${branch}"
+        fi
+    done < <(git for-each-ref --format='%(refname:short)%09%(committerdate:unix)' refs/heads)
+}
+
+
 function src() {
     custom_command "src"
     # Source shell config files to pick up any changes
-    source "${HOME}/.bashrc"
-    source "${HOME}/.bash_profile"
+    local usage="Usage: src [-n]
+  Reloads the shell config to pick up changes.
+
+  Run inside the config's own repo, it loads the newest work there instead: the
+  checkout (the main one or a worktree) or branch with the most recent change that
+  main doesn't have, committed or not. It moves the terminal there first: into that
+  worktree, or onto that branch with git switch. With nothing newer than main, or
+  outside the repo, it reloads the usual config.
+
+Options:
+  -n, --no-switch   Reload the usual config, without looking for newer work
+  -h, --help        Show this help"
+
+    local look=true
+    case "${1-}" in
+        "") ;;
+        -n|--no-switch) look=false ;;
+        -h|--help)
+            echo "${usage}"
+            return 0
+            ;;
+        *)
+            echo "Error: Unknown option '$1'" >&2
+            echo "${usage}" >&2
+            return 2
+            ;;
+    esac
+    if [[ $# -gt 1 ]]; then
+        echo "Error: src takes at most one option, got $#." >&2
+        return 2
+    fi
+
+    # Only look for newer work inside the repo this config was loaded from
+    local base=""
+    if [[ "${look}" = true ]]; then
+        local here_repo config_repo
+        here_repo=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+        config_repo=$(git -C "${dotfiles_dir}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+        if [[ -n "${here_repo}" && "${here_repo}" = "${config_repo}" ]]; then
+            if git show-ref --verify --quiet refs/heads/main; then
+                base="main"
+            elif git show-ref --verify --quiet refs/heads/master; then
+                base="master"
+            fi
+        fi
+    fi
+
+    local newest=""
+    if [[ -n "${base}" ]]; then
+        newest=$(_src_candidates "${base}" | sort -t $'\t' -k1,1nr | head -n 1)
+        if [[ -z "${newest}" ]]; then
+            echo "Nothing newer than ${base}; reloading the usual config"
+        fi
+    fi
+    if [[ -z "${newest}" ]]; then
+        source "${HOME}/.bashrc"
+        source "${HOME}/.bash_profile"
+        return
+    fi
+
+    local kind target label checkout here
+    IFS=$'\t' read -r _ kind target label <<< "${newest}"
+    here=$(git rev-parse --show-toplevel) || return 1
+    if [[ "${kind}" = branch ]]; then
+        # Not checked out anywhere, so switch this checkout over to it
+        if [[ -n "$(git status --porcelain)" ]]; then
+            echo "Error: The newest work is on branch ${label}, but this checkout has" >&2
+            echo "uncommitted changes, so it can't switch to it. Commit them first, or" >&2
+            echo "reload the usual config with: src -n" >&2
+            return 1
+        fi
+        git switch --quiet "${target}" || return 1
+        checkout="${here}"
+        echo "Switched ${checkout} to ${label}: it has the newest changes not on ${base}"
+    else
+        checkout="${target}"
+        if [[ "${checkout}" != "${here}" ]]; then
+            builtin cd "${checkout}" || return 1
+        fi
+        echo "Loading the config from ${checkout} (${label}): it has the newest changes not on ${base}"
+    fi
+    source "${checkout}/.bash_profile"
 }
 
 

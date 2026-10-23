@@ -99,9 +99,14 @@ rr git                    # Find most recent command containing 'git', confirm, 
 
 Re-sources `~/.bashrc` and `~/.bash_profile` to pick up changes without restarting the terminal.
 
+Run inside this repo, it loads the newest work instead, so you can try a change before committing it. It picks the checkout (the main one or a worktree) or branch with the most recent change that `main` doesn't have, committed or not, and moves the terminal there: into that worktree, or onto that branch with `git switch` (only if the current checkout has no uncommitted changes). With nothing newer than `main`, or outside the repo, it reloads as usual.
+
 ```bash
-src
+src                       # Reload, from the newest work when inside this repo
+src -n                    # Reload the usual config, wherever you are
 ```
+
+`rr` uses `src` too, then returns to the directory you ran it from before rerunning.
 
 ### `g` — Go to git projects
 
