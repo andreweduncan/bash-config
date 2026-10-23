@@ -852,6 +852,10 @@ function dc() {
                 echo "message at the prompt avoids shell quoting, globbing, and"
                 echo "escaping, so you can type any characters freely."
                 echo ""
+                echo "The prompt takes several lines, so you can paste or dictate"
+                echo "whole paragraphs. Enter starts a new line; press Ctrl-D on"
+                echo "an empty line to save the entry, or Ctrl-C to cancel."
+                echo ""
                 echo "Options:"
                 echo "  -h, --help    Display this help message"
                 echo "  -o, --open    Open the daily commit file after adding the message"
@@ -881,11 +885,48 @@ function dc() {
         # shell never parses it, so quotes, globs, and backslashes are taken
         # literally and need no escaping. -r keeps backslashes verbatim and
         # IFS= preserves leading/trailing whitespace.
+        #
+        # The entry can span several lines. bash 3.2's readline has no
+        # bracketed paste, so a newline in pasted or dictated text looks
+        # exactly like Enter; the only safe end marker is Ctrl-D (EOF) on an
+        # empty line. Lines left over from a paste stay in readline's buffer
+        # and feed the next read, so nothing spills back into the shell.
+        local line
+        local lines=()
         if [ -t 0 ]; then
-            IFS= read -r -e -p "Daily commit entry: " message
+            # Same pink as the custom_command header, so the save key stands out.
+            echo -e "Daily commit entry (\033[95mCtrl-D on an empty line to save\033[0m, Ctrl-C to cancel):"
+            while IFS= read -r -e -p "> " line; do
+                lines+=("${line}")
+            done
+            # Ctrl-D leaves the cursor on the last "> " prompt.
+            echo
         else
-            IFS= read -r message
+            # Piped input: take all of it. `|| [ -n ... ]` keeps a last line
+            # that has no trailing newline.
+            while IFS= read -r line || [ -n "${line}" ]; do
+                lines+=("${line}")
+            done
         fi
+
+        # Drop blank lines at the start and end; keep the ones in between,
+        # which separate paragraphs.
+        local first=0
+        local last=$(( ${#lines[@]} - 1 ))
+        while [ "${first}" -le "${last}" ] && [[ "${lines[first]}" =~ ^[[:space:]]*$ ]]; do
+            first=$(( first + 1 ))
+        done
+        while [ "${last}" -ge "${first}" ] && [[ "${lines[last]}" =~ ^[[:space:]]*$ ]]; do
+            last=$(( last - 1 ))
+        done
+        local i
+        for (( i = first; i <= last; i++ )); do
+            if [ "${i}" -eq "${first}" ]; then
+                message="${lines[i]}"
+            else
+                message="${message}"$'\n'"${lines[i]}"
+            fi
+        done
     fi
 
     # Still nothing to record (empty prompt or empty piped input).
@@ -897,10 +938,28 @@ function dc() {
     # Get current date in YYYY-MM-DD format
     current_date=$(date +"%Y-%m-%d")
 
-    # Append date and message to daily-commit.txt
-    echo "${current_date}: ${message}" >> "${daily_commit_file}"
+    # Indent every line after the first to line up under the message, so
+    # only the first line of an entry starts with a date. Blank lines stay
+    # empty rather than holding trailing spaces.
+    local indent="${current_date//?/ }  "
+    local entry=""
+    local entry_line
+    local is_first=true
+    while IFS= read -r entry_line; do
+        if [ "${is_first}" = true ]; then
+            entry="${current_date}: ${entry_line}"
+            is_first=false
+        elif [ -z "${entry_line}" ]; then
+            entry="${entry}"$'\n'
+        else
+            entry="${entry}"$'\n'"${indent}${entry_line}"
+        fi
+    done <<< "${message}"
 
-    echo "Commit recorded: ${current_date}: ${message}"
+    # Append date and message to daily-commit.txt
+    printf '%s\n' "${entry}" >> "${daily_commit_file}"
+
+    echo "Commit recorded: ${entry}"
 
     # Open the file if flag is set
     if [ "${open_file}" = true ]; then
