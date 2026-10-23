@@ -387,18 +387,179 @@ Examples:
         last_cmd=$(echo "${last_cmd}" | sed 's/^[[:space:]]*//')
     fi
 
+    # Source the config, then come back: src may move into a worktree
+    local rerun_dir="${PWD}"
+    # rr's search string isn't meant for src
+    # shellcheck disable=SC2119
     src
+    builtin cd "${rerun_dir}" || return
 
     echo -e "re-running...\n\$\033[32m${last_cmd}\033[0m"
     eval "${last_cmd}"
 }
 
 
+function _src_candidates() {
+    # For src: print a line for each checkout or branch holding work that <base>
+    # doesn't have (commits ahead of it, or uncommitted changes), tab-separated:
+    #   <time> <worktree|branch> <path or branch> <label>
+    # <time> is the newest commit's, or the newest changed file's if that's later.
+    local base="$1"
+    local line path="" head="" label="" checked_out="" ahead time newest
+
+    # Worktrees, including the main checkout. Each is a block of lines ending in a
+    # blank line; the extra echo makes sure the last block ends too.
+    while IFS= read -r line; do
+        case "${line}" in
+            "worktree "*) path="${line#worktree }" ;;
+            "HEAD "*) head="${line#HEAD }"; label="detached at ${head:0:7}" ;;
+            "branch "*)
+                label="${line#branch refs/heads/}"
+                checked_out="${checked_out}${label}"$'\n'
+                ;;
+            "")
+                if [[ -n "${head}" && -d "${path}" ]]; then
+                    time=0
+                    ahead=$(git rev-list --count "${base}..${head}")
+                    if [[ "${ahead}" -gt 0 ]]; then
+                        time=$(git log -1 --format=%ct "${head}")
+                    fi
+                    # Changed and new files (deleted ones have no time to read)
+                    newest=$(builtin cd "${path}" && \
+                        { git diff --name-only HEAD; git ls-files --others --exclude-standard; } | \
+                        while IFS= read -r file; do
+                            [[ -e "${file}" ]] && stat -f %m "${file}"
+                        done | sort -n | tail -n 1)
+                    if [[ -n "${newest}" && "${newest}" -gt "${time}" ]]; then
+                        time="${newest}"
+                    fi
+                    if [[ "${time}" -gt 0 ]]; then
+                        printf '%s\t%s\t%s\t%s\n' "${time}" worktree "${path}" "${label}"
+                    fi
+                fi
+                path=""
+                head=""
+                label=""
+                ;;
+        esac
+    done < <(git worktree list --porcelain; echo)
+
+    # Branches not checked out anywhere (those were counted above, with their changes)
+    local branch
+    while IFS=$'\t' read -r branch time; do
+        [[ "${branch}" = "${base}" ]] && continue
+        printf '%s' "${checked_out}" | grep -qxF -e "${branch}" && continue
+        ahead=$(git rev-list --count "${base}..${branch}")
+        if [[ "${ahead}" -gt 0 ]]; then
+            printf '%s\t%s\t%s\t%s\n' "${time}" branch "${branch}" "${branch}"
+        fi
+    done < <(git for-each-ref --format='%(refname:short)%09%(committerdate:unix)' refs/heads)
+}
+
+
+# Options come from the command line; rr calls src without any
+# shellcheck disable=SC2120
 function src() {
-    custom_command "src"
     # Source shell config files to pick up any changes
-    source "${HOME}/.bashrc"
-    source "${HOME}/.bash_profile"
+    local usage="Usage: src [-n] [-q]
+  Reloads the shell config to pick up changes.
+
+  Run inside the config's own repo, it loads the newest work there instead: the
+  checkout (the main one or a worktree) or branch with the most recent change that
+  main doesn't have, committed or not. It moves the terminal there first: into that
+  worktree, or onto that branch with git switch. With nothing newer than main, or
+  outside the repo, it reloads the usual config.
+
+Options:
+  -n, --no-switch   Reload the usual config, without looking for newer work
+  -q, --quiet       Print nothing, except errors
+  -h, --help        Show this help"
+
+    local look=true
+    local quiet=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -n|--no-switch) look=false ;;
+            -q|--quiet) quiet=true ;;
+            -h|--help)
+                echo "${usage}"
+                return 0
+                ;;
+            *)
+                echo "Error: Unknown option '$1'" >&2
+                echo "${usage}" >&2
+                return 2
+                ;;
+        esac
+        shift
+    done
+
+    # Quiet hides everything src and the config files print; errors still show
+    if [[ "${quiet}" = true ]]; then
+        _src_load "${look}" >/dev/null
+    else
+        custom_command "src"
+        _src_load "${look}"
+    fi
+}
+
+
+function _src_load() {
+    # For src: reload the config, loading the newest work instead when <look> is
+    # true and this is the config's own repo
+    local look="$1"
+
+    # Only look for newer work inside the repo this config was loaded from
+    local base=""
+    if [[ "${look}" = true ]]; then
+        local here_repo config_repo
+        here_repo=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+        config_repo=$(git -C "${dotfiles_dir}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+        if [[ -n "${here_repo}" && "${here_repo}" = "${config_repo}" ]]; then
+            if git show-ref --verify --quiet refs/heads/main; then
+                base="main"
+            elif git show-ref --verify --quiet refs/heads/master; then
+                base="master"
+            fi
+        fi
+    fi
+
+    local newest=""
+    if [[ -n "${base}" ]]; then
+        newest=$(_src_candidates "${base}" | sort -t $'\t' -k1,1nr | head -n 1)
+        if [[ -z "${newest}" ]]; then
+            echo "Nothing newer than ${base}; reloading the usual config"
+        fi
+    fi
+    if [[ -z "${newest}" ]]; then
+        source "${HOME}/.bashrc"
+        source "${HOME}/.bash_profile"
+        return
+    fi
+
+    local kind target label checkout here
+    IFS=$'\t' read -r _ kind target label <<< "${newest}"
+    here=$(git rev-parse --show-toplevel) || return 1
+    if [[ "${kind}" = branch ]]; then
+        # Not checked out anywhere, so switch this checkout over to it
+        if [[ -n "$(git status --porcelain)" ]]; then
+            echo "Error: The newest work is on branch ${label}, but this checkout has" >&2
+            echo "uncommitted changes, so it can't switch to it. Commit them first, or" >&2
+            echo "reload the usual config with: src -n" >&2
+            return 1
+        fi
+        git switch --quiet "${target}" || return 1
+        checkout="${here}"
+        echo "Switched ${checkout} to ${label}: it has the newest changes not on ${base}"
+    else
+        checkout="${target}"
+        if [[ "${checkout}" != "${here}" ]]; then
+            builtin cd "${checkout}" || return 1
+        fi
+        echo "Loading the config from ${checkout} (${label}): it has the newest changes not on ${base}"
+    fi
+    # shellcheck source=/dev/null
+    source "${checkout}/.bash_profile"
 }
 
 
@@ -431,6 +592,241 @@ function gif() {
     # programs/gif/gif (the same file shared with others). All argument
     # parsing and ffmpeg work lives there. Run `gif -h` for usage.
     "${dotfiles_dir}/programs/gif/gif" "$@"
+}
+
+
+function imgdiff() {
+    custom_command "imgdiff - highlight the pixels that differ between two images"
+    local usage="Usage: imgdiff [options] <image1> <image2>
+       imgdiff [options] <image>   (one image holding both pictures)
+  Compares two images with ImageMagick's \`compare\`, prints how many pixels differ, and
+  opens a copy of image1 with every differing pixel painted red.
+  Exits 0 if the images match, 1 if they differ, 2 on an error (like \`diff\`).
+
+  Images of different sizes are lined up first (as with --align): image2 is moved
+  (and scaled, if needed) to sit on image1, and only the area they share is compared.
+
+  Given one image, like a spot-the-difference puzzle, it finds the two copies of the
+  picture inside it, splits them apart and compares them. If the copies aren't clear,
+  it stops and asks whether you meant to add a second image, or to use --split.
+
+Options:
+  -a, --align           Line the images up before comparing, even if they're the same
+                        size: for screenshots scrolled or cropped differently, or a
+                        spot-the-difference pair. Uses OpenCV via uv (programs/imgdiff)
+  -s, --split           With one image: search harder for the two pictures in it,
+                        and split down or across the middle if they still aren't clear
+  -f, --fuzz [amount]   Count colours this close as the same, as a percentage, e.g. 5%
+                        (default: exact; -f alone: 10%)
+  -o, --output <file>   Where to save the highlighted image
+                        (default: \$TMPDIR/imgdiff/<image1>-vs-<image2>.png)
+  -n, --no-open         Save the highlighted image without opening it
+  -h, --help            Show this help
+
+Examples:
+  imgdiff before.png after.png          highlight every changed pixel
+  imgdiff -f 5% before.png after.png    ignore tiny colour shifts (anti-aliasing)
+  imgdiff -f cam1.png cam2.png          ignore camera noise (the default 10%)
+  imgdiff -a shot1.png shot2.png        line up two screenshots, then compare
+  imgdiff -a -f 10% left.jpg right.jpg  spot the difference in two photos
+  imgdiff -f 10% puzzle.png             spot the difference in a one-image puzzle
+  imgdiff -s -f 10% puzzle.png          the same, searching harder for the two pictures
+  imgdiff -n -o diff.png a.png b.png    save to diff.png, don't open it
+
+Requires ImageMagick: brew install imagemagick
+Lining up and splitting also need uv (brew install uv); the first run downloads OpenCV once."
+
+    local fuzz="0"
+    local default_fuzz="10%"
+    # A fuzz amount is a percentage, like 10% or 2.5%. The % is required: it's how
+    # a bare -f is told apart from -f followed by an image, and ImageMagick reads a
+    # plain number as a raw colour value out of 65535, so -fuzz 10 is nearly exact.
+    # (The pattern lives in a variable so bash 3.2 and later parse =~ the same way.)
+    local fuzz_pattern='^[0-9]+([.][0-9]+)?%$'
+    local plain_number_pattern='^[0-9]+([.][0-9]+)?$'
+    local output=""
+    local open_output=true
+    local align=false
+    local split_harder=false
+    local images=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--fuzz)
+                # The amount is optional: take the next word only if it's a
+                # percentage, so "-f 01.png 02.png" keeps both images
+                if [[ "${2-}" =~ ${fuzz_pattern} ]]; then
+                    fuzz="$2"
+                    shift 2
+                elif [[ "${2-}" =~ ${plain_number_pattern} ]]; then
+                    echo "Error: $1 takes a percentage: did you mean $1 $2%?" >&2
+                    return 2
+                else
+                    fuzz="${default_fuzz}"
+                    shift
+                fi
+                ;;
+            --fuzz=*)
+                fuzz="${1#*=}"
+                if [[ ! "${fuzz}" =~ ${fuzz_pattern} ]]; then
+                    echo "Error: --fuzz needs a percentage like 10%, got '${fuzz}'" >&2
+                    return 2
+                fi
+                shift
+                ;;
+            -o|--output)
+                if [[ -z "$2" ]]; then
+                    echo "Error: No value provided after $1" >&2
+                    echo "${usage}" >&2
+                    return 2
+                fi
+                output="$2"
+                shift 2
+                ;;
+            -n|--no-open)
+                open_output=false
+                shift
+                ;;
+            -a|--align)
+                align=true
+                shift
+                ;;
+            -s|--split)
+                split_harder=true
+                shift
+                ;;
+            -h|--help|help)
+                echo "${usage}"
+                return 0
+                ;;
+            -*)
+                echo "Error: Unknown option '$1'" >&2
+                echo "${usage}" >&2
+                return 2
+                ;;
+            *)
+                images+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    if [[ ${#images[@]} -lt 1 ]] || [[ ${#images[@]} -gt 2 ]]; then
+        echo "Error: Expected two images (or one holding both pictures), got ${#images[@]}." >&2
+        echo "${usage}" >&2
+        return 2
+    fi
+    if [[ "${split_harder}" = true ]] && [[ ${#images[@]} -ne 1 ]]; then
+        echo "Error: --split is for one image holding both pictures; got ${#images[@]} images." >&2
+        return 2
+    fi
+
+    if ! command -v magick >/dev/null 2>&1; then
+        echo "Error: ImageMagick isn't installed. Install it with: brew install imagemagick" >&2
+        return 2
+    fi
+    local image
+    for image in "${images[@]}"; do
+        if [[ ! -f "${image}" ]]; then
+            echo "Error: File not found: ${image}" >&2
+            return 2
+        fi
+    done
+
+    # One image: split it into its two pictures, then compare those
+    if [[ ${#images[@]} -eq 1 ]]; then
+        local source="${images[0]}"
+        if ! command -v uv >/dev/null 2>&1; then
+            echo "Error: Splitting an image needs uv. Install it with: brew install uv" >&2
+            return 2
+        fi
+        local base
+        base=$(basename "${source%.*}")
+        mkdir -p "${TMPDIR:-/tmp/}imgdiff"
+        images=("${TMPDIR:-/tmp/}imgdiff/${base}-first.png" "${TMPDIR:-/tmp/}imgdiff/${base}-second.png")
+        if [[ -z "${output}" ]]; then
+            output="${TMPDIR:-/tmp/}imgdiff/${base}-diff.png"
+        fi
+        local mode="--split"
+        [[ "${split_harder}" = true ]] && mode="--split-harder"
+        "${dotfiles_dir}/programs/imgdiff/imgalign" "${mode}" "${source}" "${images[0]}" "${images[1]}"
+        local split_status=$?
+        if [[ ${split_status} -eq 3 ]]; then
+            # Most often one image means the second was left off by mistake
+            echo "" >&2
+            echo "Did you mean to compare it with another image? Add the second one:" >&2
+            echo "  imgdiff ${source} <image2>" >&2
+            echo "Or, if it really holds two pictures, search harder:" >&2
+            echo "  imgdiff --split ${source}" >&2
+            return 2
+        elif [[ ${split_status} -ne 0 ]]; then
+            return 2
+        fi
+    fi
+    local image1="${images[0]}"
+    local image2="${images[1]}"
+
+    local size1 size2
+    size1=$(magick identify -format "%wx%h" "${image1}[0]") || return 2
+    size2=$(magick identify -format "%wx%h" "${image2}[0]") || return 2
+
+    local name1 name2 workdir
+    name1=$(basename "${image1%.*}")
+    name2=$(basename "${image2%.*}")
+    workdir="${TMPDIR:-/tmp/}imgdiff"
+    mkdir -p "${workdir}"
+    if [[ -z "${output}" ]]; then
+        output="${workdir}/${name1}-vs-${name2}.png"
+    fi
+
+    # compare works pixel by pixel, so images of different sizes are lined up first:
+    # imgalign crops both to the area they share and writes them as two
+    # same-size images, which are compared instead of the originals
+    local compare1="${image1}"
+    local compare2="${image2}"
+    if [[ "${align}" = true ]] || [[ "${size1}" != "${size2}" ]]; then
+        if ! command -v uv >/dev/null 2>&1; then
+            echo "Error: Lining up images needs uv. Install it with: brew install uv" >&2
+            [[ "${size1}" != "${size2}" ]] && echo "(The images are different sizes: ${size1} vs ${size2}.)" >&2
+            return 2
+        fi
+        if [[ "${align}" != true ]]; then
+            echo "The images are different sizes (${size1} vs ${size2}), so lining them up first"
+        fi
+        compare1="${workdir}/${name1}-aligned.png"
+        compare2="${workdir}/${name2}-aligned.png"
+        "${dotfiles_dir}/programs/imgdiff/imgalign" "${image1}" "${image2}" "${compare1}" "${compare2}" || return 2
+        size1=$(magick identify -format "%wx%h" "${compare1}") || return 2
+    fi
+
+    # -metric AE counts the differing pixels and prints the count to stderr.
+    # compare exits 0 when the images match, 1 when they differ, 2 on an error.
+    local result status
+    result=$(magick compare -metric AE -fuzz "${fuzz}" "${compare1}" "${compare2}" "${output}" 2>&1)
+    status=$?
+    if [[ ${status} -gt 1 ]]; then
+        echo "Error: ImageMagick couldn't compare the images: ${result}" >&2
+        return 2
+    fi
+
+    # The count comes first, followed by a normalised value in brackets. It can be
+    # fractional (partly different pixels), so round it for display.
+    local count
+    count=$(printf "%.0f" "${result%% *}")
+    local total=$(( ${size1%x*} * ${size1#*x} ))
+    local percent
+    percent=$(awk -v c="${count}" -v t="${total}" 'BEGIN { printf "%.3f", 100 * c / t }')
+
+    if [[ ${status} -eq 0 ]]; then
+        echo "Identical: no pixels differ (${size1})"
+        return 0
+    fi
+    echo "Different: ${count} of ${total} pixels differ (${percent}%)"
+    echo "Highlighted in red: ${output}"
+    if [[ "${open_output}" = true ]]; then
+        open "${output}"
+    fi
+    return 1
 }
 
 
