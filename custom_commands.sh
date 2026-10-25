@@ -836,6 +836,10 @@ function dc() {
     local open_file=false
     local daily_commit_file="${HOME}/Desktop/daily-commit.txt"
     local message=""
+    # Honor $VISUAL/$EDITOR like git. The fallback is nano (pico on macOS):
+    # -t saves on Ctrl-X without asking, so one keystroke finishes, and -m
+    # lets a click move the cursor.
+    local editor="${VISUAL:-${EDITOR:-nano -t -m}}"
 
     # Parse flags
     while [[ $# -gt 0 ]]; do
@@ -848,20 +852,21 @@ function dc() {
                 echo "dc - Daily Commit - record a timestamped note in daily-commit.txt"
                 echo "Usage: dc [options] [message]"
                 echo ""
-                echo "With no message, dc prompts you to type one. Entering the"
-                echo "message at the prompt avoids shell quoting, globbing, and"
-                echo "escaping, so you can type any characters freely."
+                echo "With no message, dc opens a text editor for the entry, like"
+                echo "git commit does. Writing it there avoids shell quoting,"
+                echo "globbing, and escaping, and allows paragraphs and pastes."
                 echo ""
-                echo "The prompt takes several lines, so you can paste or dictate"
-                echo "whole paragraphs. Enter starts a new line; press Ctrl-D on"
-                echo "an empty line to save the entry, or Ctrl-C to cancel."
+                echo "The editor is \$VISUAL or \$EDITOR if set, otherwise nano."
+                echo "In nano, press Ctrl-X to save the entry and exit. Leave the"
+                echo "file empty to cancel."
                 echo ""
                 echo "Options:"
                 echo "  -h, --help    Display this help message"
-                echo "  -o, --open    Open the daily commit file after adding the message"
+                echo "  -o, --open    Open the daily commit file in the editor, on a new"
+                echo "                line at the end (after recording any message)"
                 echo ""
                 echo "Examples:"
-                echo "  dc                               Prompt for an entry, then record it"
+                echo "  dc                               Write an entry in an editor, then record it"
                 echo "  dc Working on new feature        Record the given message"
                 echo "  dc -o Fixed bug in login         Record the message and open the file"
                 return 0
@@ -878,36 +883,36 @@ function dc() {
     if [ -z "${message}" ]; then
         # `dc -o` with no message stays a shortcut to just open the file.
         if [ "${open_file}" = true ]; then
-            open "${daily_commit_file}"
-            return 0
+            _dc_open "${editor}" "${daily_commit_file}"
+            return
         fi
-        # Otherwise prompt for the entry. Reading it interactively means the
-        # shell never parses it, so quotes, globs, and backslashes are taken
-        # literally and need no escaping. -r keeps backslashes verbatim and
-        # IFS= preserves leading/trailing whitespace.
-        #
-        # The entry can span several lines. bash 3.2's readline has no
-        # bracketed paste, so a newline in pasted or dictated text looks
-        # exactly like Enter; the only safe end marker is Ctrl-D (EOF) on an
-        # empty line. Lines left over from a paste stay in readline's buffer
-        # and feed the next read, so nothing spills back into the shell.
+        # Otherwise write the entry in a text editor, the way `git commit`
+        # does. The shell never parses it, so quotes, globs, and backslashes
+        # are taken literally and need no escaping, and the editor handles
+        # paragraphs, pastes, and moving around to fix earlier lines.
+        local input="/dev/stdin"
+        local tmpfile=""
+        if [ -t 0 ] && [ -t 1 ]; then
+            local tmpdir="${TMPDIR:-/tmp}"
+            tmpfile="$(mktemp "${tmpdir%/}/daily-commit.XXXXXX")" || return 1
+            # Unquoted so an editor with arguments (e.g. "code --wait") splits.
+            if ! ${editor} "${tmpfile}"; then
+                rm -f "${tmpfile}"
+                echo "Editor exited with an error; nothing recorded."
+                return 1
+            fi
+            input="${tmpfile}"
+        fi
+
+        # Read the editor's file, or all of piped input. -r keeps
+        # backslashes verbatim, IFS= preserves leading/trailing whitespace,
+        # and `|| [ -n ... ]` keeps a last line with no trailing newline.
         local line
         local lines=()
-        if [ -t 0 ]; then
-            # Same pink as the custom_command header, so the save key stands out.
-            echo -e "Daily commit entry (\033[95mCtrl-D on an empty line to save\033[0m, Ctrl-C to cancel):"
-            while IFS= read -r -e -p "> " line; do
-                lines+=("${line}")
-            done
-            # Ctrl-D leaves the cursor on the last "> " prompt.
-            echo
-        else
-            # Piped input: take all of it. `|| [ -n ... ]` keeps a last line
-            # that has no trailing newline.
-            while IFS= read -r line || [ -n "${line}" ]; do
-                lines+=("${line}")
-            done
-        fi
+        while IFS= read -r line || [ -n "${line}" ]; do
+            lines+=("${line}")
+        done < "${input}"
+        [ -n "${tmpfile}" ] && rm -f "${tmpfile}"
 
         # Drop blank lines at the start and end; keep the ones in between,
         # which separate paragraphs.
@@ -963,8 +968,26 @@ function dc() {
 
     # Open the file if flag is set
     if [ "${open_file}" = true ]; then
-        open "${daily_commit_file}"
+        _dc_open "${editor}" "${daily_commit_file}"
     fi
+}
+
+# Open the daily commit file in the editor with the cursor on a fresh line
+# after the last entry. `+LINE` is understood by nano, pico, vim, emacs, and mg.
+function _dc_open() {
+    local editor="$1"
+    local file="$2"
+    # A file last saved without a trailing newline would put the cursor at
+    # the end of the last entry instead of below it.
+    if [ -s "${file}" ] && [ -n "$(tail -c 1 "${file}")" ]; then
+        echo >> "${file}"
+    fi
+    local next_line=1
+    if [ -f "${file}" ]; then
+        next_line=$(( $(wc -l < "${file}") + 1 ))
+    fi
+    # Unquoted so an editor with arguments splits, as in dc.
+    ${editor} "+${next_line}" "${file}"
 }
 
 
