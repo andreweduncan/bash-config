@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Open the last two Pastebot 2 clippings in a Cursor/VS Code diff."""
+
+import argparse
+from contextlib import closing
+from datetime import datetime
+from pathlib import Path
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+
+
+DATABASE = (
+    Path.home()
+    / "Library/Group Containers/9JTH7AWHE6.com.tapbots.Pastebot2Mac"
+    / "Library/Application Support/general.pastebot/sql"
+)
+TEXT_TYPES = (
+    ("public.utf8-plain-text", "utf-8"),
+    ("public.utf16-external-plain-text", "utf-16"),
+    ("public.utf16-plain-text", "utf-16-le"),
+    ("public.plain-text", "utf-8"),
+)
+
+
+def read_clippings(database=DATABASE):
+    if not database.is_file():
+        raise ValueError("Pastebot 2 clipboard database was not found: " + str(database))
+    # One read transaction keeps both entries and their contents consistent.
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
+        db.execute("PRAGMA query_only = ON")
+        db.execute("BEGIN")
+        rows = db.execute(
+            "SELECT uuid, COALESCE(copied_at, created_at), item_count "
+            "FROM entries ORDER BY COALESCE(copied_at, created_at) DESC, rowid DESC LIMIT 2"
+        ).fetchall()
+        if len(rows) != 2:
+            raise ValueError("Pastebot needs at least two clippings to compare.")
+        clippings = []
+        for index, (entry_uuid, timestamp, item_count) in enumerate(rows):
+            label = "newest" if index == 0 else "second-newest"
+            if item_count != 1:
+                raise ValueError("The " + label + " clipping contains multiple items; copy a single text item instead.")
+            representations = dict(db.execute(
+                "SELECT type, data FROM types_data WHERE entry_uuid = ? AND item_index = 0",
+                (entry_uuid,),
+            ).fetchall())
+            for text_type, encoding in TEXT_TYPES:
+                data = representations.get(text_type)
+                if data is not None:
+                    if isinstance(data, str):
+                        text = data
+                    else:
+                        if text_type == "public.utf16-plain-text" and data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+                            encoding = "utf-16"
+                        text = data.decode(encoding)
+                    clippings.append((text, timestamp))
+                    break
+            else:
+                raise ValueError("The " + label + " clipping has no supported plain-text representation.")
+        return clippings[1], clippings[0]
+
+
+def find_editor(requested=None):
+    if requested:
+        executable = shutil.which(requested)
+        if executable:
+            return executable
+        raise ValueError("Editor command was not found: " + requested)
+    # Prefer Cursor, even when its shell command has not been added to PATH.
+    cursor = shutil.which("cursor")
+    if cursor:
+        return cursor
+    for folder in (Path("/Applications"), Path.home() / "Applications"):
+        candidate = folder / "Cursor.app/Contents/Resources/app/bin/cursor"
+        if candidate.is_file():
+            return str(candidate)
+    code = shutil.which("code")
+    if code:
+        return code
+    raise ValueError("Could not find Cursor or the code command.")
+
+
+def open_diff(older, newer, editor, wait=False):
+    directory = Path(tempfile.mkdtemp(prefix="pastebot-diff-"))
+    try:
+        for filename, (text, _) in (("older.txt", older), ("newest.txt", newer)):
+            path = directory / filename
+            # Write exact UTF-8 content, preserving line endings and final newlines.
+            path.write_bytes(text.encode("utf-8"))
+            path.chmod(0o600)
+        args = [editor, "--diff", str(directory / "older.txt"), str(directory / "newest.txt")]
+        if wait:
+            args.append("--wait")
+        for label, (text, timestamp) in (("Left: older", older), ("Right: newest", newer)):
+            date = datetime.fromtimestamp(float(timestamp)).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+            print(f"{label} — {date}, {len(text):,} characters", flush=True)
+        print("Temporary files: " + str(directory), flush=True)
+        subprocess.run(args, check=True)
+    except BaseException:
+        shutil.rmtree(directory)
+        raise
+    if wait:
+        shutil.rmtree(directory)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--editor", metavar="COMMAND", help="Override the editor, e.g. --editor code")
+    parser.add_argument("--wait", action="store_true", help="Wait for the diff to close, then delete its temporary files")
+    args = parser.parse_args()
+    try:
+        editor = find_editor(args.editor)
+        older, newer = read_clippings()
+        open_diff(older, newer, editor, args.wait)
+    except (ValueError, UnicodeError, sqlite3.Error, OSError, subprocess.CalledProcessError) as error:
+        print("Pastebot diff: " + str(error), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

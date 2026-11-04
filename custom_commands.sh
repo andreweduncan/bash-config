@@ -595,6 +595,14 @@ function gif() {
 }
 
 
+function comp() {
+    custom_command "comp - diff the last two Pastebot clippings in Cursor"
+    # Thin wrapper around programs/pastebot-diff/pastebot-diff, which also runs
+    # on its own. Run `comp -h` for usage.
+    "${dotfiles_dir}/programs/pastebot-diff/pastebot-diff" "$@"
+}
+
+
 function imgdiff() {
     custom_command "imgdiff - highlight the pixels that differ between two images"
     local usage="Usage: imgdiff [options] <image1> <image2>

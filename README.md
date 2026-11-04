@@ -38,7 +38,8 @@ bash-config/
 ├── custom_commands.sh    # Functions and aliases
 ├── programs/
 │   ├── gif/              # Standalone ffmpeg wrapper behind `gif`
-│   └── imgdiff/          # imgalign, which lines images up for `imgdiff`
+│   ├── imgdiff/          # imgalign, which lines images up for `imgdiff`
+│   └── pastebot-diff/    # Standalone Pastebot clipping diff behind `comp`
 ├── setup/
 │   └── setup.sh          # One-shot installer
 ├── alias_support/
@@ -157,6 +158,16 @@ imgdiff -f before.png after.png           # Ignore small colour shifts, like cam
 imgdiff -f 5% before.png after.png        # Choose how much to ignore
 imgdiff -a shot1.png shot2.png            # Line up two screenshots, then compare
 imgdiff -f 10% puzzle.png                 # Spot the difference in a one-image puzzle
+```
+
+### `comp` — Compare the last two clippings
+
+Opens the two most recently copied [Pastebot 2](https://tapbots.com/pastebot/) clippings as a diff in Cursor (falling back to `code`): older on the left, newest on the right. Reads Pastebot's database read-only and leaves the clipboard alone. Text only: images and multi-item clippings produce an error. Requires Python 3. See [programs/pastebot-diff](programs/pastebot-diff/README.md) for details.
+
+```bash
+comp                      # Diff the last two clippings
+comp --wait               # Wait for the diff to close, then delete its temporary files
+comp --editor code        # Use the `code` command instead of Cursor
 ```
 
 ### `gen` — Pseudorandom word generator
